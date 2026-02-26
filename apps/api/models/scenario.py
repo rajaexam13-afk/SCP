@@ -1,5 +1,6 @@
 import uuid
-from sqlalchemy import Column, String, Boolean, ForeignKey, Enum, Text, Float, Integer
+from sqlalchemy import Column, String, Boolean, ForeignKey, Text, Float, Integer
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import relationship
 from core.database import Base, TimestampMixin
 import enum
@@ -19,13 +20,13 @@ class Scenario(Base, TimestampMixin):
     """
     __tablename__ = "scenarios"
 
-    id           = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    tenant_id    = Column(String, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
-    base_plan_id = Column(String, nullable=False)  # Reference to base plan version in ClickHouse
+    id           = Column(PG_UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
+    tenant_id    = Column(PG_UUID(as_uuid=False), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
+    base_plan_id = Column(PG_UUID(as_uuid=False), nullable=False)  # Reference to base plan
     name         = Column(String(255), nullable=False)
     description  = Column(Text, default="")
-    status       = Column(Enum(ScenarioStatus), default=ScenarioStatus.draft, nullable=False)
-    created_by   = Column(String, ForeignKey("users.id"), nullable=False)
+    status       = Column(String(20), default="draft", nullable=False)
+    created_by   = Column(PG_UUID(as_uuid=False), ForeignKey("users.id"), nullable=False)
     delta_count  = Column(Integer, default=0)
 
     creator      = relationship("User", foreign_keys=[created_by])
@@ -40,9 +41,9 @@ class ScenarioDelta(Base, TimestampMixin):
     """
     __tablename__ = "scenario_deltas"
 
-    id              = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    scenario_id     = Column(String, ForeignKey("scenarios.id", ondelete="CASCADE"), nullable=False, index=True)
-    tenant_id       = Column(String, nullable=False, index=True)
+    id              = Column(PG_UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
+    scenario_id     = Column(PG_UUID(as_uuid=False), ForeignKey("scenarios.id", ondelete="CASCADE"), nullable=False, index=True)
+    tenant_id       = Column(PG_UUID(as_uuid=False), nullable=False, index=True)
 
     # Dimension keys
     sku_id          = Column(String(100), nullable=False)
@@ -57,7 +58,7 @@ class ScenarioDelta(Base, TimestampMixin):
     change_pct      = Column(Float)         # Computed on write for display
 
     # Metadata
-    author_id       = Column(String, ForeignKey("users.id"), nullable=False)
+    author_id       = Column(PG_UUID(as_uuid=False), ForeignKey("users.id"), nullable=False)
     comment         = Column(Text, default="")
     is_locked       = Column(Boolean, default=False)
     delta_type      = Column(String(20), default="absolute")  # absolute | relative | factor
@@ -69,9 +70,9 @@ class ScenarioDelta(Base, TimestampMixin):
 class ScenarioComment(Base, TimestampMixin):
     __tablename__ = "scenario_comments"
 
-    id          = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    scenario_id = Column(String, ForeignKey("scenarios.id", ondelete="CASCADE"), nullable=False, index=True)
-    author_id   = Column(String, ForeignKey("users.id"), nullable=False)
+    id          = Column(PG_UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
+    scenario_id = Column(PG_UUID(as_uuid=False), ForeignKey("scenarios.id", ondelete="CASCADE"), nullable=False, index=True)
+    author_id   = Column(PG_UUID(as_uuid=False), ForeignKey("users.id"), nullable=False)
     content     = Column(Text, nullable=False)
     ref_sku_id  = Column(String(100))   # Optional: comment anchored to a specific SKU
     ref_period  = Column(String(20))    # Optional: comment anchored to a specific period
@@ -87,11 +88,11 @@ class BasePlan(Base, TimestampMixin):
     """
     __tablename__ = "base_plans"
 
-    id          = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    tenant_id   = Column(String, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
+    id          = Column(PG_UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
+    tenant_id   = Column(PG_UUID(as_uuid=False), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
     name        = Column(String(255), nullable=False)
     period      = Column(String(100))       # e.g. "2025 Q1-Q4"
     is_locked   = Column(Boolean, default=False)
-    locked_by   = Column(String, ForeignKey("users.id"))
+    locked_by   = Column(PG_UUID(as_uuid=False), ForeignKey("users.id"))
     sku_count   = Column(Integer, default=0)
     row_count   = Column(Integer, default=0)

@@ -1,5 +1,6 @@
 import uuid
 from sqlalchemy import Column, String, Boolean, ForeignKey, Enum, Text, Integer
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import relationship
 from core.database import Base, TimestampMixin
 import enum
@@ -22,11 +23,11 @@ class UserRole(str, enum.Enum):
 class Tenant(Base, TimestampMixin):
     __tablename__ = "tenants"
 
-    id          = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    id          = Column(PG_UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
     name        = Column(String(255), nullable=False)
     slug        = Column(String(100), unique=True, nullable=False, index=True)
     industry    = Column(String(100))
-    plan_tier   = Column(Enum(PlanTier), default=PlanTier.free, nullable=False)
+    plan_tier   = Column(String(20), default="free", nullable=False)
     sku_limit   = Column(Integer, default=500)
     is_active   = Column(Boolean, default=True)
     settings    = Column(Text, default="{}")  # JSON blob for tenant config
@@ -38,12 +39,12 @@ class Tenant(Base, TimestampMixin):
 class User(Base, TimestampMixin):
     __tablename__ = "users"
 
-    id          = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    tenant_id   = Column(String, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
+    id          = Column(PG_UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
+    tenant_id   = Column(PG_UUID(as_uuid=False), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
     email       = Column(String(255), nullable=False, index=True)
     name        = Column(String(255), nullable=False)
     hashed_pw   = Column(String(255), nullable=False)
-    role        = Column(Enum(UserRole), default=UserRole.planner, nullable=False)
+    role        = Column(String(20), default="planner", nullable=False)
     is_active   = Column(Boolean, default=True)
 
     tenant      = relationship("Tenant", back_populates="users")
@@ -57,8 +58,8 @@ class User(Base, TimestampMixin):
 class DataSchema(Base, TimestampMixin):
     __tablename__ = "data_schemas"
 
-    id          = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
-    tenant_id   = Column(String, ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
+    id          = Column(PG_UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
+    tenant_id   = Column(PG_UUID(as_uuid=False), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
     name        = Column(String(255), nullable=False)
     source_type = Column(String(50))        # csv, excel, sap, oracle...
     mappings    = Column(Text, default="{}")  # JSON: {"product_id": "Article_Number", ...}
