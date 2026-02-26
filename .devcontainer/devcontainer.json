@@ -6,12 +6,14 @@
     "ghcr.io/devcontainers/features/node:1": { "version": "20" },
     "ghcr.io/devcontainers/features/python:1": { "version": "3.12" }
   },
-  "postCreateCommand": "make dev",
+  "onCreateCommand": "cp -n .env.example .env || true",
+  "updateContentCommand": "cd apps/web && npm install",
+  "postCreateCommand": "bash .devcontainer/start.sh",
   "forwardPorts": [3000, 8000, 8001, 8002, 9001],
   "portsAttributes": {
-    "3000": { "label": "Web UI",      "onAutoForward": "openBrowser" },
-    "8000": { "label": "API",         "onAutoForward": "silent" },
-    "9001": { "label": "MinIO",       "onAutoForward": "silent" }
+    "3000": { "label": "Web UI",  "onAutoForward": "openBrowser" },
+    "8000": { "label": "API",     "onAutoForward": "silent" },
+    "9001": { "label": "MinIO",   "onAutoForward": "silent" }
   },
   "customizations": {
     "vscode": {
@@ -20,7 +22,10 @@
         "ms-python.python",
         "bradlc.vscode-tailwindcss",
         "ms-azuretools.vscode-docker"
-      ]
+      ],
+      "settings": {
+        "typescript.tsdk": "apps/web/node_modules/typescript/lib"
+      }
     }
   }
 }

@@ -6,9 +6,9 @@ import { api } from "@/lib/api";
 import { useAuthStore } from "@/store/auth";
 import {
   Users, Building2, Layers, Plug2,
-  Send, Loader2, Crown, Trash2, Shield,
-  ChevronDown, Check, Plus, Sparkles,
-  Eye, BarChart3, Settings2, Wifi,
+  Send, Loader2, Trash2, Shield,
+  Check, Sparkles,
+  BarChart3, Settings2, Wifi,
 } from "lucide-react";
 
 // ─── Tab definition ───────────────────────────────────────────

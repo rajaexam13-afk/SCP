@@ -6,16 +6,15 @@ import {
   useReactTable,
   getCoreRowModel,
   getSortedRowModel,
-  getFilteredRowModel,
   flexRender,
   createColumnHelper,
   SortingState,
 } from "@tanstack/react-table";
 import { api } from "@/lib/api";
 import {
-  Search, Filter, Download, Play, ChevronUp, ChevronDown,
+  Search, Download, Play, ChevronUp, ChevronDown,
   ChevronsUpDown, AlertTriangle, CheckCircle2, Edit3, X, Check,
-  RefreshCw, TrendingUp,
+  RefreshCw,
 } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────
@@ -215,6 +214,8 @@ function ForecastCell({
 
 // ─── Main Page ────────────────────────────────────────────────
 
+const colHelper = createColumnHelper<SKURow>();
+
 export default function ForecastsPage() {
   const [page, setPage]           = useState(1);
   const [search, setSearch]       = useState("");
@@ -261,8 +262,6 @@ export default function ForecastsPage() {
     weekLabel(-(HIST_WEEKS - i))
   );
   const fctLabels = Array.from({ length: FCT_WEEKS }, (_, i) => weekLabel(i + 1));
-
-  const colHelper = createColumnHelper<SKURow>();
 
   const columns = useMemo(
     () => [
