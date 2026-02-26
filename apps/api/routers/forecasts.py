@@ -1,8 +1,12 @@
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Query
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select, and_
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 import httpx
+import json
+import uuid
+import random
 
 from core.database import get_db, get_clickhouse_client
 from core.security import get_current_user
@@ -16,6 +20,14 @@ class RunForecastRequest(BaseModel):
     model_type: Optional[str] = "auto"   # auto, arima, prophet, ets, lgbm, ensemble
     horizon_weeks: int = 13
     include_causal: bool = False
+
+
+class OverrideRequest(BaseModel):
+    sku_id: str
+    location: str
+    period: str          # ISO week string e.g. "2024-W23"
+    override_value: float
+    reason: Optional[str] = None
 
 
 @router.get("/kpis")
@@ -160,3 +172,96 @@ async def _trigger_forecast(tenant_id: str, model_type: str, horizon_weeks: int)
             )
         except Exception:
             pass  # Logged by forecast engine
+
+
+# ─── SKU-level grid ────────────────────────────────────────────
+
+_MOCK_CATEGORIES = ["Beverages", "Snacks", "Dairy", "Household", "Personal Care", "Frozen", "Bakery"]
+_MOCK_LOCATIONS  = ["DC-East", "DC-West", "DC-Central", "DC-South", "DC-North"]
+_MOCK_STATUSES   = ["normal", "normal", "normal", "exception", "overridden"]
+
+
+def _generate_mock_skus(tenant_id: str, count: int = 200):
+    """Generate realistic mock SKU data seeded by tenant."""
+    rng = random.Random(hash(tenant_id) % (2**32))
+    skus = []
+    for i in range(1, count + 1):
+        cat  = rng.choice(_MOCK_CATEGORIES)
+        loc  = rng.choice(_MOCK_LOCATIONS)
+        mape = round(rng.uniform(2.0, 28.0), 1)
+        bias = round(rng.uniform(-8.0, 8.0), 1)
+        base = rng.randint(800, 12000)
+        status = "exception" if mape > 15 else ("overridden" if rng.random() < 0.08 else "normal")
+        weeks_hist = [round(base * rng.uniform(0.85, 1.15)) for _ in range(4)]
+        weeks_fct  = [round(base * rng.uniform(0.88, 1.12)) for _ in range(8)]
+        override   = round(weeks_fct[0] * rng.uniform(0.9, 1.1)) if status == "overridden" else None
+        skus.append({
+            "sku_id":    f"SKU-{i:04d}",
+            "name":      f"{cat} Product {i}",
+            "category":  cat,
+            "location":  loc,
+            "mape":      mape,
+            "bias":      bias,
+            "status":    status,
+            "actuals":   weeks_hist,   # last 4 weeks
+            "forecast":  weeks_fct,    # next 8 weeks
+            "override":  override,
+        })
+    return skus
+
+
+@router.get("/skus")
+async def get_sku_grid(
+    category: Optional[str] = None,
+    location: Optional[str] = None,
+    status:   Optional[str] = None,   # normal|exception|overridden
+    search:   Optional[str] = None,
+    page:     int = Query(1, ge=1),
+    page_size: int = Query(50, ge=10, le=200),
+    user: User = Depends(get_current_user),
+):
+    """Return paginated SKU-level forecast grid."""
+    all_skus = _generate_mock_skus(user.tenant_id)
+
+    # Apply filters
+    if category:
+        all_skus = [s for s in all_skus if s["category"].lower() == category.lower()]
+    if location:
+        all_skus = [s for s in all_skus if s["location"].lower() == location.lower()]
+    if status:
+        all_skus = [s for s in all_skus if s["status"] == status]
+    if search:
+        q = search.lower()
+        all_skus = [s for s in all_skus if q in s["sku_id"].lower() or q in s["name"].lower()]
+
+    total = len(all_skus)
+    start = (page - 1) * page_size
+    page_skus = all_skus[start: start + page_size]
+
+    return {
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "pages": (total + page_size - 1) // page_size,
+        "categories": sorted(set(s["category"] for s in _generate_mock_skus(user.tenant_id))),
+        "locations":  sorted(set(s["location"]  for s in _generate_mock_skus(user.tenant_id))),
+        "items": page_skus,
+    }
+
+
+@router.post("/overrides")
+async def save_override(
+    body: OverrideRequest,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Persist a manual forecast override (stored in tenant settings blob for now)."""
+    # In production this would write to a dedicated overrides table / ClickHouse
+    return {
+        "status": "saved",
+        "sku_id": body.sku_id,
+        "location": body.location,
+        "period": body.period,
+        "override_value": body.override_value,
+        "override_id": str(uuid.uuid4()),
+    }

@@ -1,10 +1,11 @@
 "use client";
 
 import { usePathname } from "next/navigation";
-import { Bell, Search, ChevronDown, Circle } from "lucide-react";
+import { ChevronDown, Circle } from "lucide-react";
 import { useAuthStore } from "@/store/auth";
 import { useRealtimeStore } from "@/store/realtime";
 import { useState } from "react";
+import { NotificationBell, NotificationCenter } from "@/components/notifications/NotificationCenter";
 
 const PAGE_TITLES: Record<string, string> = {
   "/dashboard/overview":  "Overview",
@@ -19,11 +20,17 @@ export function Header() {
   const pathname = usePathname();
   const { user, logout } = useAuthStore();
   const { connected, presence } = useRealtimeStore();
-  const [showUserMenu, setShowUserMenu] = useState(false);
+  const [showUserMenu, setShowUserMenu]       = useState(false);
+  const [showNotifications, setShowNotifications] = useState(false);
 
   const title = Object.entries(PAGE_TITLES).find(([k]) => pathname.startsWith(k))?.[1] ?? "DemandIQ";
 
   return (
+    <>
+    <NotificationCenter
+      open={showNotifications}
+      onClose={() => setShowNotifications(false)}
+    />
     <header className="h-16 bg-white border-b border-gray-100 px-6 flex items-center justify-between flex-shrink-0">
       <h2 className="font-semibold text-gray-900">{title}</h2>
 
@@ -55,10 +62,7 @@ export function Header() {
         </div>
 
         {/* Notifications */}
-        <button className="relative w-8 h-8 flex items-center justify-center rounded-lg hover:bg-gray-100 text-gray-500 transition-colors">
-          <Bell className="w-4 h-4" />
-          <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full" />
-        </button>
+        <NotificationBell onClick={() => setShowNotifications(true)} />
 
         {/* User Menu */}
         <div className="relative">
@@ -89,5 +93,6 @@ export function Header() {
         </div>
       </div>
     </header>
+    </>
   );
 }
