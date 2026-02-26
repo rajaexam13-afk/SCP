@@ -1,0 +1,25 @@
+{
+  "name": "demand-platform",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "services/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "turbo run dev",
+    "build": "turbo run build",
+    "lint": "turbo run lint",
+    "test": "turbo run test",
+    "db:migrate": "cd packages/db && npm run migrate",
+    "infra:up": "docker-compose -f docker-compose.yml up -d",
+    "infra:down": "docker-compose -f docker-compose.yml down"
+  },
+  "devDependencies": {
+    "turbo": "^1.13.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

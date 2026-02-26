@@ -1,0 +1,193 @@
+version: "3.9"
+
+services:
+  # ─── Infrastructure ───────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: dp_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-dpuser}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-dppassword}
+      POSTGRES_DB: ${POSTGRES_DB:-demandplatform}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./packages/db/migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dpuser"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.3
+    container_name: dp_clickhouse
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_USER: ${CLICKHOUSE_USER:-dpuser}
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-dppassword}
+      CLICKHOUSE_DB: ${CLICKHOUSE_DB:-demand}
+    ports:
+      - "8123:8123"   # HTTP
+      - "9000:9000"   # Native
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - ./packages/db/clickhouse:/docker-entrypoint-initdb.d
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8123/ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: dp_redis
+    restart: unless-stopped
+    command: redis-server --requirepass ${REDIS_PASSWORD:-dpredis}
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  minio:
+    image: minio/minio:latest
+    container_name: dp_minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-dpminiouser}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-dpminiopassword}
+    ports:
+      - "9010:9000"   # API
+      - "9001:9001"   # Console
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─── Backend Services ─────────────────────────────────────────
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    container_name: dp_api
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-dpuser}:${POSTGRES_PASSWORD:-dppassword}@postgres:5432/${POSTGRES_DB:-demandplatform}
+      CLICKHOUSE_URL: http://${CLICKHOUSE_USER:-dpuser}:${CLICKHOUSE_PASSWORD:-dppassword}@clickhouse:8123/${CLICKHOUSE_DB:-demand}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-dpredis}@redis:6379/0
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-dpminiouser}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-dpminiopassword}
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./apps/api:/app
+
+  forecast-engine:
+    build:
+      context: ./services/forecast-engine
+      dockerfile: Dockerfile
+    container_name: dp_forecast
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_URL: http://${CLICKHOUSE_USER:-dpuser}:${CLICKHOUSE_PASSWORD:-dppassword}@clickhouse:8123/${CLICKHOUSE_DB:-demand}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-dpredis}@redis:6379/1
+      API_URL: http://api:8000
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-dpminiouser}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-dpminiopassword}
+    depends_on:
+      - clickhouse
+      - redis
+    volumes:
+      - ./services/forecast-engine:/app
+
+  ingestion:
+    build:
+      context: ./services/ingestion
+      dockerfile: Dockerfile
+    container_name: dp_ingestion
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-dpuser}:${POSTGRES_PASSWORD:-dppassword}@postgres:5432/${POSTGRES_DB:-demandplatform}
+      CLICKHOUSE_URL: http://${CLICKHOUSE_USER:-dpuser}:${CLICKHOUSE_PASSWORD:-dppassword}@clickhouse:8123/${CLICKHOUSE_DB:-demand}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-dpredis}@redis:6379/2
+      MINIO_ENDPOINT: minio:9000
+      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-dpminiouser}
+      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-dpminiopassword}
+    ports:
+      - "8001:8001"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    volumes:
+      - ./services/ingestion:/app
+
+  realtime:
+    build:
+      context: ./services/realtime
+      dockerfile: Dockerfile
+    container_name: dp_realtime
+    restart: unless-stopped
+    environment:
+      REDIS_URL: redis://:${REDIS_PASSWORD:-dpredis}@redis:6379/3
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
+      PORT: "8002"
+    ports:
+      - "8002:8002"
+    depends_on:
+      - redis
+    volumes:
+      - ./services/realtime:/app
+
+  # ─── Frontend ─────────────────────────────────────────────────
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+    container_name: dp_web
+    restart: unless-stopped
+    environment:
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+      NEXT_PUBLIC_WS_URL: ${NEXT_PUBLIC_WS_URL:-ws://localhost:8002}
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+      - realtime
+    volumes:
+      - ./apps/web:/app
+      - /app/node_modules
+      - /app/.next
+
+volumes:
+  postgres_data:
+  clickhouse_data:
+  redis_data:
+  minio_data:
