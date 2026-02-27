@@ -52,11 +52,10 @@ def _sc_dict(s: Scenario, depth: int = 0) -> dict:
     }
 
 
-def _build_tree(scenario: Scenario, depth: int = 0) -> dict:
-    """Recursively build nested tree node."""
-    node = _sc_dict(scenario, depth)
-    node["children"] = [_build_tree(child, depth + 1) for child in (scenario.children or [])]
-    return node
+def _set_depths(node: dict, depth: int = 0) -> None:
+    node["depth"] = depth
+    for child in node.get("children", []):
+        _set_depths(child, depth + 1)
 
 
 # ─── Scenarios CRUD ──────────────────────────────────────────
@@ -80,20 +79,29 @@ async def get_scenario_tree(
     db: AsyncSession = Depends(get_db),
 ):
     """
-    Returns scenarios as a nested tree.
-    Root nodes (parent_id=None) are top-level.
-    Children are embedded recursively via SQLAlchemy selectin loading.
+    Returns scenarios as a nested tree (flat query + Python assembly).
+    No lazy-loading — safe for async SQLAlchemy.
     """
     result = await db.execute(
         select(Scenario)
-        .where(
-            Scenario.tenant_id == user.tenant_id,
-            Scenario.parent_id == None,  # noqa: E711
-        )
+        .where(Scenario.tenant_id == user.tenant_id)
         .order_by(Scenario.created_at.asc())
     )
-    roots = result.scalars().all()
-    return [_build_tree(root) for root in roots]
+    all_scenarios = result.scalars().all()
+
+    # Build tree in Python: no ORM relationship access needed
+    nodes: dict = {s.id: {**_sc_dict(s), "children": []} for s in all_scenarios}
+    roots = []
+    for s in all_scenarios:
+        node = nodes[s.id]
+        if s.parent_id and s.parent_id in nodes:
+            nodes[s.parent_id]["children"].append(node)
+        elif not s.parent_id:
+            roots.append(node)
+
+    for root in roots:
+        _set_depths(root, 0)
+    return roots
 
 
 @router.post("", status_code=201)

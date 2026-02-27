@@ -36,7 +36,8 @@ class Scenario(Base, TimestampMixin):
     creator      = relationship("User", foreign_keys=[created_by])
     deltas       = relationship("ScenarioDelta", back_populates="scenario", cascade="all, delete-orphan")
     comments     = relationship("ScenarioComment", back_populates="scenario", cascade="all, delete-orphan")
-    children     = relationship("Scenario", foreign_keys="Scenario.parent_id", backref="parent", lazy="selectin")
+    children     = relationship("Scenario", foreign_keys="[Scenario.parent_id]", back_populates="parent", lazy="noload")
+    parent       = relationship("Scenario", foreign_keys="[Scenario.parent_id]", back_populates="children", remote_side=[id], lazy="noload")
 
 
 class ScenarioDelta(Base, TimestampMixin):
