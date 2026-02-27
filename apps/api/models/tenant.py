@@ -1,6 +1,6 @@
 import uuid
-from sqlalchemy import Column, String, Boolean, ForeignKey, Enum, Text, Integer
-from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+from sqlalchemy import Column, String, Boolean, ForeignKey, Text, Integer
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID, JSONB
 from sqlalchemy.orm import relationship
 from core.database import Base, TimestampMixin
 import enum
@@ -30,7 +30,7 @@ class Tenant(Base, TimestampMixin):
     plan_tier   = Column(String(20), default="free", nullable=False)
     sku_limit   = Column(Integer, default=500)
     is_active   = Column(Boolean, default=True)
-    settings    = Column(Text, default="{}")  # JSON blob for tenant config
+    settings    = Column(JSONB, default={})   # JSON blob for tenant config
 
     users       = relationship("User", back_populates="tenant", cascade="all, delete-orphan")
     schemas     = relationship("DataSchema", back_populates="tenant", cascade="all, delete-orphan")
@@ -62,7 +62,7 @@ class DataSchema(Base, TimestampMixin):
     tenant_id   = Column(PG_UUID(as_uuid=False), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
     name        = Column(String(255), nullable=False)
     source_type = Column(String(50))        # csv, excel, sap, oracle...
-    mappings    = Column(Text, default="{}")  # JSON: {"product_id": "Article_Number", ...}
+    mappings    = Column(JSONB, default={})   # JSON: {"product_id": "Article_Number", ...}
     is_active   = Column(Boolean, default=True)
 
     tenant      = relationship("Tenant", back_populates="schemas")
