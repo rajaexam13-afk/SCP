@@ -17,21 +17,26 @@ class Scenario(Base, TimestampMixin):
     """
     A scenario stores ONLY deltas (overrides) relative to a base plan.
     No data is copied. Query-time resolution merges base + deltas.
+    Scenarios can be nested: parent_id references another Scenario,
+    forming a tree (e.g. Enterprise → Optimistic, Conservative).
     """
     __tablename__ = "scenarios"
 
     id           = Column(PG_UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
     tenant_id    = Column(PG_UUID(as_uuid=False), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
-    base_plan_id = Column(PG_UUID(as_uuid=False), nullable=False)  # Reference to base plan
+    base_plan_id = Column(PG_UUID(as_uuid=False), nullable=False)  # ClickHouse base plan ref
+    parent_id    = Column(PG_UUID(as_uuid=False), ForeignKey("scenarios.id", ondelete="SET NULL"), nullable=True, index=True)
     name         = Column(String(255), nullable=False)
     description  = Column(Text, default="")
     status       = Column(String(20), default="draft", nullable=False)
     created_by   = Column(PG_UUID(as_uuid=False), ForeignKey("users.id"), nullable=False)
     delta_count  = Column(Integer, default=0)
+    is_protected = Column(Boolean, default=False, nullable=False)  # Cannot be deleted
 
     creator      = relationship("User", foreign_keys=[created_by])
     deltas       = relationship("ScenarioDelta", back_populates="scenario", cascade="all, delete-orphan")
     comments     = relationship("ScenarioComment", back_populates="scenario", cascade="all, delete-orphan")
+    children     = relationship("Scenario", foreign_keys="Scenario.parent_id", backref="parent", lazy="selectin")
 
 
 class ScenarioDelta(Base, TimestampMixin):
