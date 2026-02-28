@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useCallback } from "react";
+import { useState, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   useReactTable,
@@ -12,10 +12,11 @@ import {
 } from "@tanstack/react-table";
 import { api } from "@/lib/api";
 import {
-  Search, Download, Play, ChevronUp, ChevronDown,
+  Download, Play, ChevronUp, ChevronDown,
   ChevronsUpDown, AlertTriangle, CheckCircle2, Edit3, X, Check,
-  RefreshCw, GitBranch, Filter,
+  RefreshCw, GitBranch,
 } from "lucide-react";
+import { useForecastFilters } from "@/store/forecastFilters";
 
 // ─── Types ────────────────────────────────────────────────────
 
@@ -39,42 +40,17 @@ interface OverrideCell {
   skuName: string;
 }
 
-interface ScenarioNode {
-  id: string;
-  name: string;
-  depth: number;
-  is_protected: boolean;
-  children: ScenarioNode[];
-}
+// ─── Time config (mirrors store presets) ─────────────────────
 
-// ─── Time presets ─────────────────────────────────────────────
-
-const TIME_PRESETS = [
-  { key: "past_4w",  label: "Last 4w",  hist: 4,  fct: 0  },
-  { key: "next_8w",  label: "Next 8w",  hist: 4,  fct: 8  },
-  { key: "next_13w", label: "Next 13w", hist: 4,  fct: 13 },
-  { key: "past_26w", label: "Last 26w", hist: 26, fct: 0  },
-] as const;
-
-type TimeKey = typeof TIME_PRESETS[number]["key"];
-
-const STATUS_OPTIONS = [
-  { key: "exception", label: "Exception" },
-  { key: "overridden", label: "Overridden" },
-  { key: "normal", label: "Normal" },
-];
+const TIME_CONFIG: Record<string, { hist: number; fct: number }> = {
+  past_4w:  { hist: 4,  fct: 0  },
+  next_8w:  { hist: 4,  fct: 8  },
+  next_13w: { hist: 4,  fct: 13 },
+  past_26w: { hist: 26, fct: 0  },
+};
 
 // ─── Helpers ──────────────────────────────────────────────────
 
-function flattenTree(
-  nodes: ScenarioNode[],
-  depth = 0
-): Array<{ id: string; name: string; depth: number; is_protected: boolean }> {
-  return nodes.flatMap((n) => [
-    { id: n.id, name: n.name, depth, is_protected: n.is_protected },
-    ...flattenTree(n.children ?? [], depth + 1),
-  ]);
-}
 
 function fmtNum(n: number | null | undefined) {
   if (n == null) return "—";
@@ -243,37 +219,20 @@ function ForecastCell({
 const colHelper = createColumnHelper<SKURow>();
 
 export default function ForecastsPage() {
-  const [page, setPage]     = useState(1);
-  const [search, setSearch] = useState("");
-  const [category, setCategory] = useState("");
-  const [location, setLocation] = useState("");
-  const [statusF, setStatusF]   = useState("");
-  const [scenario, setScenario] = useState("");
-  const [timeRange, setTimeRange] = useState<TimeKey>("next_8w");
+  // ── Filter state lives in shared store (rendered in Header) ──
+  const {
+    search, scenario, timeRange, category, location, statusF,
+    page, setPage,
+  } = useForecastFilters();
+
   const [sorting, setSorting]   = useState<SortingState>([]);
   const [overrides, setOverrides] = useState<Record<string, number>>({});
 
   const qc = useQueryClient();
 
-  // ── Scenarios ──
-  const { data: scenarioTree } = useQuery<ScenarioNode[]>({
-    queryKey: ["scenarios-tree"],
-    queryFn: () => api.get("/scenarios/tree").then((r) => r.data),
-  });
-
-  const flatScenarios = useMemo(
-    () => flattenTree(scenarioTree ?? []),
-    [scenarioTree]
-  );
-
-  const selectedScenarioName = scenario
-    ? flatScenarios.find((s) => s.id === scenario)?.name ?? null
-    : null;
 
   // ── Time config ──
-  const timeConfig = TIME_PRESETS.find((t) => t.key === timeRange) ?? TIME_PRESETS[1];
-  const HIST_WEEKS = timeConfig.hist;
-  const FCT_WEEKS  = timeConfig.fct;
+  const { hist: HIST_WEEKS, fct: FCT_WEEKS } = TIME_CONFIG[timeRange] ?? TIME_CONFIG["next_8w"];
 
   // ── SKU query ──
   const { data, isLoading } = useQuery({
@@ -305,13 +264,6 @@ export default function ForecastsPage() {
       setOverrides((prev) => ({ ...prev, [`${skuId}-${weekIdx}`]: newVal })),
     []
   );
-
-  const hasAnyFilter = !!(search || category || location || statusF || scenario || timeRange !== "next_8w");
-
-  const clearAll = () => {
-    setSearch(""); setCategory(""); setLocation(""); setStatusF("");
-    setScenario(""); setTimeRange("next_8w"); setPage(1);
-  };
 
   // ── Week labels (driven by time preset) ──
   const histLabels = Array.from({ length: HIST_WEEKS }, (_, i) =>
@@ -418,220 +370,32 @@ export default function ForecastsPage() {
     URL.revokeObjectURL(url);
   };
 
-  // ── Select shared style ──
-  const selCls = "text-sm border border-gray-200 rounded-lg px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-brand-500 text-gray-600";
-
   return (
     <div className="space-y-4 h-full flex flex-col">
-      {/* ── Combined header + filter bar ── */}
-      <div className="flex-shrink-0 bg-white border border-gray-200 rounded-xl px-4 pt-4 pb-3 space-y-3">
-        {/* Row 1: title + action buttons */}
-        <div className="flex items-center justify-between">
-          <div>
-            <h1 className="text-2xl font-semibold text-gray-900">Forecasts</h1>
-            <p className="text-sm text-gray-500 mt-0.5">
-              SKU-level grid · Click any forecast cell to override
-            </p>
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={exportCSV}
-              className="flex items-center gap-1.5 text-sm text-gray-600 border border-gray-200 rounded-lg px-3 py-2 hover:bg-gray-50"
-            >
-              <Download className="w-4 h-4" /> Export CSV
-            </button>
-            <button
-              onClick={() => runForecast.mutate()}
-              disabled={runForecast.isPending}
-              className="flex items-center gap-1.5 text-sm bg-brand-600 text-white rounded-lg px-4 py-2 hover:bg-brand-700 disabled:opacity-60"
-            >
-              {runForecast.isPending
-                ? <RefreshCw className="w-4 h-4 animate-spin" />
-                : <Play className="w-4 h-4" />}
-              Run Forecast
-            </button>
-          </div>
-        </div>
-
-        {/* Divider */}
-        <div className="border-t border-gray-100" />
-
-        {/* Row 2: filter controls (auto-wrapping) */}
-        <div className="flex flex-wrap items-center gap-2">
-          {/* Classic filter icon label */}
-          <div className="flex items-center gap-1.5 text-gray-400 flex-shrink-0">
-            <Filter className="w-4 h-4" />
-            <span className="text-xs font-medium text-gray-500">Filters</span>
-          </div>
-
-          <div className="h-5 w-px bg-gray-200 flex-shrink-0" />
-
-          {/* Search */}
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-            <input
-              value={search}
-              onChange={(e) => { setSearch(e.target.value); setPage(1); }}
-              placeholder="Search SKU or product…"
-              className="pl-9 pr-4 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 bg-white w-52"
-            />
-          </div>
-
-          <div className="h-5 w-px bg-gray-200 flex-shrink-0" />
-
-          {/* Scenario */}
-          <div className="flex items-center gap-1.5">
-            <GitBranch className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
-            <select
-              value={scenario}
-              onChange={(e) => { setScenario(e.target.value); setPage(1); }}
-              className={selCls}
-            >
-              <option value="">All scenarios</option>
-              {flatScenarios.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {"\u00a0".repeat(s.depth * 3)}
-                  {s.is_protected ? "🔒 " : ""}
-                  {s.name}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          <div className="h-5 w-px bg-gray-200 flex-shrink-0" />
-
-          {/* Time presets */}
-          <div className="flex items-center gap-0.5 bg-gray-100 rounded-lg p-0.5">
-            {TIME_PRESETS.map((t) => (
-              <button
-                key={t.key}
-                onClick={() => { setTimeRange(t.key); setPage(1); }}
-                className={[
-                  "px-3 py-1.5 text-xs font-medium rounded-md transition-colors",
-                  timeRange === t.key
-                    ? "bg-white text-brand-700 shadow-sm"
-                    : "text-gray-500 hover:text-gray-700",
-                ].join(" ")}
-              >
-                {t.label}
-              </button>
-            ))}
-          </div>
-
-          <div className="h-5 w-px bg-gray-200 flex-shrink-0" />
-
-          {/* Category */}
-          <select
-            value={category}
-            onChange={(e) => { setCategory(e.target.value); setPage(1); }}
-            className={selCls}
+      {/* Page actions — filters live in the top Header bar */}
+      <div className="flex items-center justify-between flex-shrink-0">
+        <p className="text-sm text-gray-500">
+          SKU-level grid · Click any forecast cell to override
+          {data?.total != null && <span className="ml-2 font-medium text-gray-700">{data.total} SKUs</span>}
+        </p>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={exportCSV}
+            className="flex items-center gap-1.5 text-sm text-gray-600 border border-gray-200 rounded-lg px-3 py-2 hover:bg-gray-50"
           >
-            <option value="">All Categories</option>
-            {(data?.categories ?? []).map((c: string) => (
-              <option key={c} value={c}>{c}</option>
-            ))}
-          </select>
-
-          {/* Location */}
-          <select
-            value={location}
-            onChange={(e) => { setLocation(e.target.value); setPage(1); }}
-            className={selCls}
+            <Download className="w-4 h-4" /> Export CSV
+          </button>
+          <button
+            onClick={() => runForecast.mutate()}
+            disabled={runForecast.isPending}
+            className="flex items-center gap-1.5 text-sm bg-brand-600 text-white rounded-lg px-4 py-2 hover:bg-brand-700 disabled:opacity-60"
           >
-            <option value="">All Locations</option>
-            {(data?.locations ?? []).map((l: string) => (
-              <option key={l} value={l}>{l}</option>
-            ))}
-          </select>
-
-          {/* Status pills */}
-          <div className="flex items-center gap-1">
-            {STATUS_OPTIONS.map(({ key, label }) => {
-              const active = statusF === key;
-              return (
-                <button
-                  key={key}
-                  onClick={() => { setStatusF(active ? "" : key); setPage(1); }}
-                  className={[
-                    "px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors",
-                    active
-                      ? key === "exception"
-                        ? "bg-red-50 text-red-700 border-red-200"
-                        : key === "overridden"
-                        ? "bg-blue-50 text-blue-700 border-blue-200"
-                        : "bg-green-50 text-green-700 border-green-200"
-                      : "bg-white text-gray-500 border-gray-200 hover:border-gray-300 hover:text-gray-700",
-                  ].join(" ")}
-                >
-                  {label}
-                </button>
-              );
-            })}
-          </div>
-
-          {/* Count + Clear */}
-          <div className="ml-auto flex items-center gap-3 flex-shrink-0">
-            <span className="text-sm text-gray-400 whitespace-nowrap">
-              {data?.total ?? 0} SKUs
-            </span>
-            {hasAnyFilter && (
-              <button
-                onClick={clearAll}
-                className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 border border-gray-200 rounded-lg px-2.5 py-1.5 hover:bg-gray-50"
-              >
-                <X className="w-3.5 h-3.5" /> Clear all
-              </button>
-            )}
-          </div>
+            {runForecast.isPending
+              ? <RefreshCw className="w-4 h-4 animate-spin" />
+              : <Play className="w-4 h-4" />}
+            Run Forecast
+          </button>
         </div>
-
-        {/* Row 3: Active filter chips */}
-        {hasAnyFilter && (
-          <div className="flex flex-wrap items-center gap-1.5 pt-0.5 border-t border-gray-100">
-            <span className="text-xs text-gray-400">Active:</span>
-            {scenario && selectedScenarioName && (
-              <span className="inline-flex items-center gap-1 bg-brand-50 text-brand-700 border border-brand-200 rounded-full px-2.5 py-0.5 text-xs font-medium">
-                <GitBranch className="w-3 h-3" /> {selectedScenarioName}
-                <button onClick={() => { setScenario(""); setPage(1); }}><X className="w-3 h-3" /></button>
-              </span>
-            )}
-            {timeRange !== "next_8w" && (
-              <span className="inline-flex items-center gap-1 bg-gray-100 text-gray-700 border border-gray-200 rounded-full px-2.5 py-0.5 text-xs font-medium">
-                {TIME_PRESETS.find((t) => t.key === timeRange)?.label}
-                <button onClick={() => { setTimeRange("next_8w"); setPage(1); }}><X className="w-3 h-3" /></button>
-              </span>
-            )}
-            {category && (
-              <span className="inline-flex items-center gap-1 bg-gray-100 text-gray-700 border border-gray-200 rounded-full px-2.5 py-0.5 text-xs font-medium">
-                {category}
-                <button onClick={() => { setCategory(""); setPage(1); }}><X className="w-3 h-3" /></button>
-              </span>
-            )}
-            {location && (
-              <span className="inline-flex items-center gap-1 bg-gray-100 text-gray-700 border border-gray-200 rounded-full px-2.5 py-0.5 text-xs font-medium">
-                {location}
-                <button onClick={() => { setLocation(""); setPage(1); }}><X className="w-3 h-3" /></button>
-              </span>
-            )}
-            {statusF && (
-              <span className={[
-                "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium border",
-                statusF === "exception" ? "bg-red-50 text-red-700 border-red-200"
-                : statusF === "overridden" ? "bg-blue-50 text-blue-700 border-blue-200"
-                : "bg-green-50 text-green-700 border-green-200",
-              ].join(" ")}>
-                {statusF}
-                <button onClick={() => { setStatusF(""); setPage(1); }}><X className="w-3 h-3" /></button>
-              </span>
-            )}
-            {search && (
-              <span className="inline-flex items-center gap-1 bg-gray-100 text-gray-700 border border-gray-200 rounded-full px-2.5 py-0.5 text-xs font-medium">
-                "{search}"
-                <button onClick={() => { setSearch(""); setPage(1); }}><X className="w-3 h-3" /></button>
-              </span>
-            )}
-          </div>
-        )}
       </div>
 
       {/* Table */}
