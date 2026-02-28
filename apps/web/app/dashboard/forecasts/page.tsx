@@ -14,7 +14,7 @@ import { api } from "@/lib/api";
 import {
   Search, Download, Play, ChevronUp, ChevronDown,
   ChevronsUpDown, AlertTriangle, CheckCircle2, Edit3, X, Check,
-  RefreshCw,
+  RefreshCw, GitBranch, ShieldCheck,
 } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────
@@ -27,19 +27,54 @@ interface SKURow {
   mape: number;
   bias: number;
   status: "normal" | "exception" | "overridden";
-  actuals: number[];    // last 4 weeks
-  forecast: number[];   // next 8 weeks
+  actuals: number[];
+  forecast: number[];
   override: number | null;
 }
 
 interface OverrideCell {
   skuId: string;
-  weekIdx: number;   // index into forecast[]
+  weekIdx: number;
   currentValue: number;
   skuName: string;
 }
 
+interface ScenarioNode {
+  id: string;
+  name: string;
+  depth: number;
+  is_protected: boolean;
+  children: ScenarioNode[];
+}
+
+// ─── Time presets ─────────────────────────────────────────────
+
+const TIME_PRESETS = [
+  { key: "past_4w",  label: "Last 4w",  hist: 4,  fct: 0  },
+  { key: "next_8w",  label: "Next 8w",  hist: 4,  fct: 8  },
+  { key: "next_13w", label: "Next 13w", hist: 4,  fct: 13 },
+  { key: "past_26w", label: "Last 26w", hist: 26, fct: 0  },
+] as const;
+
+type TimeKey = typeof TIME_PRESETS[number]["key"];
+
+const STATUS_OPTIONS = [
+  { key: "exception", label: "Exception" },
+  { key: "overridden", label: "Overridden" },
+  { key: "normal", label: "Normal" },
+];
+
 // ─── Helpers ──────────────────────────────────────────────────
+
+function flattenTree(
+  nodes: ScenarioNode[],
+  depth = 0
+): Array<{ id: string; name: string; depth: number; is_protected: boolean }> {
+  return nodes.flatMap((n) => [
+    { id: n.id, name: n.name, depth, is_protected: n.is_protected },
+    ...flattenTree(n.children ?? [], depth + 1),
+  ]);
+}
 
 function fmtNum(n: number | null | undefined) {
   if (n == null) return "—";
@@ -50,8 +85,7 @@ function weekLabel(offset: number) {
   const now = new Date();
   const d = new Date(now);
   d.setDate(now.getDate() + offset * 7);
-  const wk = getISOWeek(d);
-  return `W${wk}`;
+  return `W${getISOWeek(d)}`;
 }
 
 function getISOWeek(d: Date) {
@@ -82,7 +116,7 @@ function statusBadge(status: string) {
 
 function mapeColor(mape: number) {
   if (mape > 15) return "text-red-600 font-semibold";
-  if (mape > 8)  return "text-yellow-600";
+  if (mape > 8) return "text-yellow-600";
   return "text-green-600";
 }
 
@@ -101,7 +135,8 @@ function OverridePopover({
   const [reason, setReason] = useState("");
 
   return (
-    <div className="absolute z-50 w-72 bg-white rounded-xl border border-gray-200 shadow-xl p-4"
+    <div
+      className="absolute z-50 w-72 bg-white rounded-xl border border-gray-200 shadow-xl p-4"
       style={{ top: "100%", left: 0 }}
     >
       <div className="flex items-center justify-between mb-3">
@@ -155,12 +190,7 @@ function OverridePopover({
 // ─── Forecast Cell ────────────────────────────────────────────
 
 function ForecastCell({
-  value,
-  skuId,
-  skuName,
-  weekIdx,
-  isHistorical,
-  onOverrideSaved,
+  value, skuId, skuName, weekIdx, isHistorical, onOverrideSaved,
 }: {
   value: number;
   skuId: string;
@@ -170,7 +200,6 @@ function ForecastCell({
   onOverrideSaved: (skuId: string, weekIdx: number, newVal: number) => void;
 }) {
   const [open, setOpen] = useState(false);
-  const qc = useQueryClient();
 
   const mutation = useMutation({
     mutationFn: (body: { override_value: number; reason: string }) =>
@@ -187,11 +216,8 @@ function ForecastCell({
     },
   });
 
-  if (isHistorical) {
-    return (
-      <span className="text-gray-400 text-xs font-mono">{fmtNum(value)}</span>
-    );
-  }
+  if (isHistorical)
+    return <span className="text-gray-400 text-xs font-mono">{fmtNum(value)}</span>;
 
   return (
     <div className="relative group">
@@ -217,26 +243,52 @@ function ForecastCell({
 const colHelper = createColumnHelper<SKURow>();
 
 export default function ForecastsPage() {
-  const [page, setPage]           = useState(1);
-  const [search, setSearch]       = useState("");
-  const [category, setCategory]   = useState("");
-  const [location, setLocation]   = useState("");
-  const [statusF, setStatusF]     = useState("");
-  const [sorting, setSorting]     = useState<SortingState>([]);
-  const [overrides, setOverrides] = useState<Record<string, number>>({});  // key: "skuId-weekIdx"
+  const [page, setPage]     = useState(1);
+  const [search, setSearch] = useState("");
+  const [category, setCategory] = useState("");
+  const [location, setLocation] = useState("");
+  const [statusF, setStatusF]   = useState("");
+  const [scenario, setScenario] = useState("");
+  const [timeRange, setTimeRange] = useState<TimeKey>("next_8w");
+  const [sorting, setSorting]   = useState<SortingState>([]);
+  const [overrides, setOverrides] = useState<Record<string, number>>({});
+
   const qc = useQueryClient();
 
+  // ── Scenarios ──
+  const { data: scenarioTree } = useQuery<ScenarioNode[]>({
+    queryKey: ["scenarios-tree"],
+    queryFn: () => api.get("/scenarios/tree").then((r) => r.data),
+  });
+
+  const flatScenarios = useMemo(
+    () => flattenTree(scenarioTree ?? []),
+    [scenarioTree]
+  );
+
+  const selectedScenarioName = scenario
+    ? flatScenarios.find((s) => s.id === scenario)?.name ?? null
+    : null;
+
+  // ── Time config ──
+  const timeConfig = TIME_PRESETS.find((t) => t.key === timeRange) ?? TIME_PRESETS[1];
+  const HIST_WEEKS = timeConfig.hist;
+  const FCT_WEEKS  = timeConfig.fct;
+
+  // ── SKU query ──
   const { data, isLoading } = useQuery({
-    queryKey: ["sku-grid", page, search, category, location, statusF],
+    queryKey: ["sku-grid", page, search, category, location, statusF, scenario, timeRange],
     queryFn: () =>
       api.get("/forecasts/skus", {
         params: {
           page,
           page_size: 50,
-          ...(search   && { search }),
-          ...(category && { category }),
-          ...(location && { location }),
-          ...(statusF  && { status: statusF }),
+          ...(search    && { search }),
+          ...(category  && { category }),
+          ...(location  && { location }),
+          ...(statusF   && { status: statusF }),
+          ...(scenario  && { scenario_id: scenario }),
+          time_range: timeRange,
         },
       }).then((r) => r.data),
     placeholderData: (prev) => prev,
@@ -249,32 +301,35 @@ export default function ForecastsPage() {
   });
 
   const handleOverrideSaved = useCallback(
-    (skuId: string, weekIdx: number, newVal: number) => {
-      setOverrides((prev) => ({ ...prev, [`${skuId}-${weekIdx}`]: newVal }));
-    },
+    (skuId: string, weekIdx: number, newVal: number) =>
+      setOverrides((prev) => ({ ...prev, [`${skuId}-${weekIdx}`]: newVal })),
     []
   );
 
-  const HIST_WEEKS = 4;
-  const FCT_WEEKS  = 8;
+  const hasAnyFilter = !!(search || category || location || statusF || scenario || timeRange !== "next_8w");
 
+  const clearAll = () => {
+    setSearch(""); setCategory(""); setLocation(""); setStatusF("");
+    setScenario(""); setTimeRange("next_8w"); setPage(1);
+  };
+
+  // ── Week labels (driven by time preset) ──
   const histLabels = Array.from({ length: HIST_WEEKS }, (_, i) =>
     weekLabel(-(HIST_WEEKS - i))
   );
-  const fctLabels = Array.from({ length: FCT_WEEKS }, (_, i) => weekLabel(i + 1));
+  const fctLabels = Array.from({ length: FCT_WEEKS }, (_, i) =>
+    weekLabel(i + 1)
+  );
 
+  // ── Columns ──
   const columns = useMemo(
     () => [
       colHelper.accessor("sku_id", {
-        header: "SKU",
-        size: 90,
-        cell: (i) => (
-          <span className="font-mono text-xs text-gray-600">{i.getValue()}</span>
-        ),
+        header: "SKU", size: 90,
+        cell: (i) => <span className="font-mono text-xs text-gray-600">{i.getValue()}</span>,
       }),
       colHelper.accessor("name", {
-        header: "Product",
-        size: 200,
+        header: "Product", size: 200,
         cell: (i) => (
           <span className="text-sm text-gray-900 font-medium truncate block max-w-[180px]" title={i.getValue()}>
             {i.getValue()}
@@ -282,25 +337,16 @@ export default function ForecastsPage() {
         ),
       }),
       colHelper.accessor("category", {
-        header: "Category",
-        size: 110,
-        cell: (i) => (
-          <span className="text-xs text-gray-500">{i.getValue()}</span>
-        ),
+        header: "Category", size: 110,
+        cell: (i) => <span className="text-xs text-gray-500">{i.getValue()}</span>,
       }),
       colHelper.accessor("location", {
-        header: "Location",
-        size: 100,
-        cell: (i) => (
-          <span className="text-xs text-gray-500">{i.getValue()}</span>
-        ),
+        header: "Location", size: 100,
+        cell: (i) => <span className="text-xs text-gray-500">{i.getValue()}</span>,
       }),
-      // Historical actuals
       ...histLabels.map((label, idx) =>
         colHelper.display({
-          id: `hist_${idx}`,
-          header: label,
-          size: 74,
+          id: `hist_${idx}`, header: label, size: 74,
           cell: ({ row }) => (
             <ForecastCell
               value={row.original.actuals[idx]}
@@ -313,12 +359,9 @@ export default function ForecastsPage() {
           ),
         })
       ),
-      // Forecast weeks
       ...fctLabels.map((label, idx) =>
         colHelper.display({
-          id: `fct_${idx}`,
-          header: label,
-          size: 74,
+          id: `fct_${idx}`, header: label, size: 74,
           cell: ({ row }) => {
             const key = `${row.original.sku_id}-${idx}`;
             const val = overrides[key] ?? row.original.forecast[idx];
@@ -336,8 +379,7 @@ export default function ForecastsPage() {
         })
       ),
       colHelper.accessor("mape", {
-        header: "MAPE %",
-        size: 80,
+        header: "MAPE %", size: 80,
         cell: (i) => (
           <span className={`text-xs font-mono ${mapeColor(i.getValue())}`}>
             {i.getValue().toFixed(1)}%
@@ -345,8 +387,7 @@ export default function ForecastsPage() {
         ),
       }),
       colHelper.accessor("status", {
-        header: "Status",
-        size: 110,
+        header: "Status", size: 110,
         cell: (i) => statusBadge(i.getValue()),
       }),
     ],
@@ -367,15 +408,18 @@ export default function ForecastsPage() {
   const exportCSV = () => {
     const rows = data?.items ?? [];
     const header = ["SKU", "Product", "Category", "Location", "MAPE%", "Status"];
-    const lines  = rows.map((r: SKURow) =>
+    const lines = rows.map((r: SKURow) =>
       [r.sku_id, `"${r.name}"`, r.category, r.location, r.mape, r.status].join(",")
     );
     const blob = new Blob([[header, ...lines].join("\n")], { type: "text/csv" });
-    const url  = URL.createObjectURL(blob);
-    const a    = document.createElement("a");
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
     a.href = url; a.download = "forecast_grid.csv"; a.click();
     URL.revokeObjectURL(url);
   };
+
+  // ── Select shared style ──
+  const selCls = "text-sm border border-gray-200 rounded-lg px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-brand-500 text-gray-600";
 
   return (
     <div className="space-y-4 h-full flex flex-col">
@@ -399,78 +443,192 @@ export default function ForecastsPage() {
             disabled={runForecast.isPending}
             className="flex items-center gap-1.5 text-sm bg-brand-600 text-white rounded-lg px-4 py-2 hover:bg-brand-700 disabled:opacity-60"
           >
-            {runForecast.isPending ? (
-              <RefreshCw className="w-4 h-4 animate-spin" />
-            ) : (
-              <Play className="w-4 h-4" />
-            )}
+            {runForecast.isPending
+              ? <RefreshCw className="w-4 h-4 animate-spin" />
+              : <Play className="w-4 h-4" />}
             Run Forecast
           </button>
         </div>
       </div>
 
-      {/* Filter bar */}
-      <div className="flex items-center gap-3 flex-shrink-0">
-        <div className="relative flex-1 max-w-xs">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-          <input
-            value={search}
-            onChange={(e) => { setSearch(e.target.value); setPage(1); }}
-            placeholder="Search SKU or product…"
-            className="w-full pl-9 pr-4 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 bg-white"
-          />
-        </div>
+      {/* ── Filter bar (auto-wrapping) ── */}
+      <div className="flex-shrink-0 bg-white border border-gray-200 rounded-xl px-4 py-3 space-y-2.5">
+        <div className="flex flex-wrap items-center gap-2">
 
-        <select
-          value={category}
-          onChange={(e) => { setCategory(e.target.value); setPage(1); }}
-          className="text-sm border border-gray-200 rounded-lg px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-brand-500 text-gray-600"
-        >
-          <option value="">All Categories</option>
-          {(data?.categories ?? []).map((c: string) => (
-            <option key={c} value={c}>{c}</option>
-          ))}
-        </select>
+          {/* Search */}
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+            <input
+              value={search}
+              onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+              placeholder="Search SKU or product…"
+              className="pl-9 pr-4 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 bg-white w-56"
+            />
+          </div>
 
-        <select
-          value={location}
-          onChange={(e) => { setLocation(e.target.value); setPage(1); }}
-          className="text-sm border border-gray-200 rounded-lg px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-brand-500 text-gray-600"
-        >
-          <option value="">All Locations</option>
-          {(data?.locations ?? []).map((l: string) => (
-            <option key={l} value={l}>{l}</option>
-          ))}
-        </select>
+          {/* Separator */}
+          <div className="h-6 w-px bg-gray-200" />
 
-        <select
-          value={statusF}
-          onChange={(e) => { setStatusF(e.target.value); setPage(1); }}
-          className="text-sm border border-gray-200 rounded-lg px-3 py-2 bg-white focus:outline-none focus:ring-2 focus:ring-brand-500 text-gray-600"
-        >
-          <option value="">All Statuses</option>
-          <option value="exception">Exceptions only</option>
-          <option value="overridden">Overridden only</option>
-          <option value="normal">Normal only</option>
-        </select>
+          {/* Scenario */}
+          <div className="flex items-center gap-1.5">
+            <GitBranch className="w-4 h-4 text-gray-400 flex-shrink-0" />
+            <select
+              value={scenario}
+              onChange={(e) => { setScenario(e.target.value); setPage(1); }}
+              className={selCls}
+            >
+              <option value="">All scenarios</option>
+              {flatScenarios.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {"\u00a0".repeat(s.depth * 3)}
+                  {s.is_protected ? "🔒 " : ""}
+                  {s.name}
+                </option>
+              ))}
+            </select>
+          </div>
 
-        {(search || category || location || statusF) && (
-          <button
-            onClick={() => { setSearch(""); setCategory(""); setLocation(""); setStatusF(""); setPage(1); }}
-            className="text-xs text-gray-500 hover:text-gray-700 flex items-center gap-1"
+          {/* Separator */}
+          <div className="h-6 w-px bg-gray-200" />
+
+          {/* Time presets */}
+          <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
+            {TIME_PRESETS.map((t) => (
+              <button
+                key={t.key}
+                onClick={() => { setTimeRange(t.key); setPage(1); }}
+                className={[
+                  "px-3 py-1.5 text-xs font-medium rounded-md transition-colors",
+                  timeRange === t.key
+                    ? "bg-white text-brand-700 shadow-sm"
+                    : "text-gray-500 hover:text-gray-700",
+                ].join(" ")}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Separator */}
+          <div className="h-6 w-px bg-gray-200" />
+
+          {/* Category */}
+          <select
+            value={category}
+            onChange={(e) => { setCategory(e.target.value); setPage(1); }}
+            className={selCls}
           >
-            <X className="w-3.5 h-3.5" /> Clear
-          </button>
-        )}
+            <option value="">All Categories</option>
+            {(data?.categories ?? []).map((c: string) => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </select>
 
-        <div className="ml-auto text-sm text-gray-500">
-          {data?.total ?? 0} SKUs
+          {/* Location */}
+          <select
+            value={location}
+            onChange={(e) => { setLocation(e.target.value); setPage(1); }}
+            className={selCls}
+          >
+            <option value="">All Locations</option>
+            {(data?.locations ?? []).map((l: string) => (
+              <option key={l} value={l}>{l}</option>
+            ))}
+          </select>
+
+          {/* Status pills */}
+          <div className="flex items-center gap-1">
+            {STATUS_OPTIONS.map(({ key, label }) => {
+              const active = statusF === key;
+              return (
+                <button
+                  key={key}
+                  onClick={() => { setStatusF(active ? "" : key); setPage(1); }}
+                  className={[
+                    "px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors",
+                    active
+                      ? key === "exception"
+                        ? "bg-red-50 text-red-700 border-red-200"
+                        : key === "overridden"
+                        ? "bg-blue-50 text-blue-700 border-blue-200"
+                        : "bg-green-50 text-green-700 border-green-200"
+                      : "bg-white text-gray-500 border-gray-200 hover:border-gray-300 hover:text-gray-700",
+                  ].join(" ")}
+                >
+                  {label}
+                </button>
+              );
+            })}
+          </div>
+
+          {/* Count + Clear */}
+          <div className="ml-auto flex items-center gap-3 flex-shrink-0">
+            <span className="text-sm text-gray-400 whitespace-nowrap">
+              {data?.total ?? 0} SKUs
+            </span>
+            {hasAnyFilter && (
+              <button
+                onClick={clearAll}
+                className="flex items-center gap-1 text-xs text-gray-500 hover:text-gray-700 border border-gray-200 rounded-lg px-2.5 py-1.5 hover:bg-gray-50"
+              >
+                <X className="w-3.5 h-3.5" /> Clear all
+              </button>
+            )}
+          </div>
         </div>
+
+        {/* Active filter chips (shown when anything is active) */}
+        {hasAnyFilter && (
+          <div className="flex flex-wrap items-center gap-1.5 pt-1 border-t border-gray-100">
+            <span className="text-xs text-gray-400">Active:</span>
+            {scenario && selectedScenarioName && (
+              <span className="inline-flex items-center gap-1 bg-brand-50 text-brand-700 border border-brand-200 rounded-full px-2.5 py-0.5 text-xs font-medium">
+                <GitBranch className="w-3 h-3" /> {selectedScenarioName}
+                <button onClick={() => { setScenario(""); setPage(1); }} className="ml-0.5 hover:text-brand-900"><X className="w-3 h-3" /></button>
+              </span>
+            )}
+            {timeRange !== "next_8w" && (
+              <span className="inline-flex items-center gap-1 bg-gray-100 text-gray-700 border border-gray-200 rounded-full px-2.5 py-0.5 text-xs font-medium">
+                {TIME_PRESETS.find((t) => t.key === timeRange)?.label}
+                <button onClick={() => { setTimeRange("next_8w"); setPage(1); }} className="ml-0.5 hover:text-gray-900"><X className="w-3 h-3" /></button>
+              </span>
+            )}
+            {category && (
+              <span className="inline-flex items-center gap-1 bg-gray-100 text-gray-700 border border-gray-200 rounded-full px-2.5 py-0.5 text-xs font-medium">
+                {category}
+                <button onClick={() => { setCategory(""); setPage(1); }} className="ml-0.5 hover:text-gray-900"><X className="w-3 h-3" /></button>
+              </span>
+            )}
+            {location && (
+              <span className="inline-flex items-center gap-1 bg-gray-100 text-gray-700 border border-gray-200 rounded-full px-2.5 py-0.5 text-xs font-medium">
+                {location}
+                <button onClick={() => { setLocation(""); setPage(1); }} className="ml-0.5 hover:text-gray-900"><X className="w-3 h-3" /></button>
+              </span>
+            )}
+            {statusF && (
+              <span className={[
+                "inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium border",
+                statusF === "exception" ? "bg-red-50 text-red-700 border-red-200"
+                : statusF === "overridden" ? "bg-blue-50 text-blue-700 border-blue-200"
+                : "bg-green-50 text-green-700 border-green-200",
+              ].join(" ")}>
+                {statusF}
+                <button onClick={() => { setStatusF(""); setPage(1); }} className="ml-0.5"><X className="w-3 h-3" /></button>
+              </span>
+            )}
+            {search && (
+              <span className="inline-flex items-center gap-1 bg-gray-100 text-gray-700 border border-gray-200 rounded-full px-2.5 py-0.5 text-xs font-medium">
+                "{search}"
+                <button onClick={() => { setSearch(""); setPage(1); }} className="ml-0.5 hover:text-gray-900"><X className="w-3 h-3" /></button>
+              </span>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Table */}
       <div className="flex-1 bg-white rounded-2xl border border-gray-100 overflow-hidden flex flex-col">
-        {/* Column header legend */}
+        {/* Legend */}
         <div className="flex items-center gap-4 px-4 py-2 border-b border-gray-100 bg-gray-50 text-xs text-gray-500 flex-shrink-0">
           <div className="flex items-center gap-1.5">
             <div className="w-3 h-3 rounded bg-gray-100 border border-gray-200" />
@@ -480,6 +638,12 @@ export default function ForecastsPage() {
             <div className="w-3 h-3 rounded bg-blue-50 border border-blue-100" />
             Statistical forecast · click to override
           </div>
+          {scenario && selectedScenarioName && (
+            <div className="ml-auto flex items-center gap-1.5 text-brand-600 font-medium">
+              <GitBranch className="w-3.5 h-3.5" />
+              Scenario: {selectedScenarioName}
+            </div>
+          )}
         </div>
 
         <div className="overflow-auto flex-1">
