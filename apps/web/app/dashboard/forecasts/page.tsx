@@ -14,7 +14,7 @@ import { api } from "@/lib/api";
 import {
   Search, Download, Play, ChevronUp, ChevronDown,
   ChevronsUpDown, AlertTriangle, CheckCircle2, Edit3, X, Check,
-  RefreshCw, GitBranch, ShieldCheck,
+  RefreshCw, GitBranch, Filter,
 } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────
@@ -423,37 +423,48 @@ export default function ForecastsPage() {
 
   return (
     <div className="space-y-4 h-full flex flex-col">
-      {/* Page header */}
-      <div className="flex items-center justify-between flex-shrink-0">
-        <div>
-          <h1 className="text-2xl font-semibold text-gray-900">Forecasts</h1>
-          <p className="text-sm text-gray-500 mt-0.5">
-            SKU-level grid · Click any forecast cell to override
-          </p>
+      {/* ── Combined header + filter bar ── */}
+      <div className="flex-shrink-0 bg-white border border-gray-200 rounded-xl px-4 pt-4 pb-3 space-y-3">
+        {/* Row 1: title + action buttons */}
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-semibold text-gray-900">Forecasts</h1>
+            <p className="text-sm text-gray-500 mt-0.5">
+              SKU-level grid · Click any forecast cell to override
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={exportCSV}
+              className="flex items-center gap-1.5 text-sm text-gray-600 border border-gray-200 rounded-lg px-3 py-2 hover:bg-gray-50"
+            >
+              <Download className="w-4 h-4" /> Export CSV
+            </button>
+            <button
+              onClick={() => runForecast.mutate()}
+              disabled={runForecast.isPending}
+              className="flex items-center gap-1.5 text-sm bg-brand-600 text-white rounded-lg px-4 py-2 hover:bg-brand-700 disabled:opacity-60"
+            >
+              {runForecast.isPending
+                ? <RefreshCw className="w-4 h-4 animate-spin" />
+                : <Play className="w-4 h-4" />}
+              Run Forecast
+            </button>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={exportCSV}
-            className="flex items-center gap-1.5 text-sm text-gray-600 border border-gray-200 rounded-lg px-3 py-2 hover:bg-gray-50"
-          >
-            <Download className="w-4 h-4" /> Export CSV
-          </button>
-          <button
-            onClick={() => runForecast.mutate()}
-            disabled={runForecast.isPending}
-            className="flex items-center gap-1.5 text-sm bg-brand-600 text-white rounded-lg px-4 py-2 hover:bg-brand-700 disabled:opacity-60"
-          >
-            {runForecast.isPending
-              ? <RefreshCw className="w-4 h-4 animate-spin" />
-              : <Play className="w-4 h-4" />}
-            Run Forecast
-          </button>
-        </div>
-      </div>
 
-      {/* ── Filter bar (auto-wrapping) ── */}
-      <div className="flex-shrink-0 bg-white border border-gray-200 rounded-xl px-4 py-3 space-y-2.5">
+        {/* Divider */}
+        <div className="border-t border-gray-100" />
+
+        {/* Row 2: filter controls (auto-wrapping) */}
         <div className="flex flex-wrap items-center gap-2">
+          {/* Classic filter icon label */}
+          <div className="flex items-center gap-1.5 text-gray-400 flex-shrink-0">
+            <Filter className="w-4 h-4" />
+            <span className="text-xs font-medium text-gray-500">Filters</span>
+          </div>
+
+          <div className="h-5 w-px bg-gray-200 flex-shrink-0" />
 
           {/* Search */}
           <div className="relative">
@@ -462,16 +473,15 @@ export default function ForecastsPage() {
               value={search}
               onChange={(e) => { setSearch(e.target.value); setPage(1); }}
               placeholder="Search SKU or product…"
-              className="pl-9 pr-4 py-2 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 bg-white w-56"
+              className="pl-9 pr-4 py-1.5 text-sm border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-brand-500 bg-white w-52"
             />
           </div>
 
-          {/* Separator */}
-          <div className="h-6 w-px bg-gray-200" />
+          <div className="h-5 w-px bg-gray-200 flex-shrink-0" />
 
           {/* Scenario */}
           <div className="flex items-center gap-1.5">
-            <GitBranch className="w-4 h-4 text-gray-400 flex-shrink-0" />
+            <GitBranch className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
             <select
               value={scenario}
               onChange={(e) => { setScenario(e.target.value); setPage(1); }}
@@ -488,11 +498,10 @@ export default function ForecastsPage() {
             </select>
           </div>
 
-          {/* Separator */}
-          <div className="h-6 w-px bg-gray-200" />
+          <div className="h-5 w-px bg-gray-200 flex-shrink-0" />
 
           {/* Time presets */}
-          <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-0.5">
+          <div className="flex items-center gap-0.5 bg-gray-100 rounded-lg p-0.5">
             {TIME_PRESETS.map((t) => (
               <button
                 key={t.key}
@@ -509,8 +518,7 @@ export default function ForecastsPage() {
             ))}
           </div>
 
-          {/* Separator */}
-          <div className="h-6 w-px bg-gray-200" />
+          <div className="h-5 w-px bg-gray-200 flex-shrink-0" />
 
           {/* Category */}
           <select
@@ -577,32 +585,32 @@ export default function ForecastsPage() {
           </div>
         </div>
 
-        {/* Active filter chips (shown when anything is active) */}
+        {/* Row 3: Active filter chips */}
         {hasAnyFilter && (
-          <div className="flex flex-wrap items-center gap-1.5 pt-1 border-t border-gray-100">
+          <div className="flex flex-wrap items-center gap-1.5 pt-0.5 border-t border-gray-100">
             <span className="text-xs text-gray-400">Active:</span>
             {scenario && selectedScenarioName && (
               <span className="inline-flex items-center gap-1 bg-brand-50 text-brand-700 border border-brand-200 rounded-full px-2.5 py-0.5 text-xs font-medium">
                 <GitBranch className="w-3 h-3" /> {selectedScenarioName}
-                <button onClick={() => { setScenario(""); setPage(1); }} className="ml-0.5 hover:text-brand-900"><X className="w-3 h-3" /></button>
+                <button onClick={() => { setScenario(""); setPage(1); }}><X className="w-3 h-3" /></button>
               </span>
             )}
             {timeRange !== "next_8w" && (
               <span className="inline-flex items-center gap-1 bg-gray-100 text-gray-700 border border-gray-200 rounded-full px-2.5 py-0.5 text-xs font-medium">
                 {TIME_PRESETS.find((t) => t.key === timeRange)?.label}
-                <button onClick={() => { setTimeRange("next_8w"); setPage(1); }} className="ml-0.5 hover:text-gray-900"><X className="w-3 h-3" /></button>
+                <button onClick={() => { setTimeRange("next_8w"); setPage(1); }}><X className="w-3 h-3" /></button>
               </span>
             )}
             {category && (
               <span className="inline-flex items-center gap-1 bg-gray-100 text-gray-700 border border-gray-200 rounded-full px-2.5 py-0.5 text-xs font-medium">
                 {category}
-                <button onClick={() => { setCategory(""); setPage(1); }} className="ml-0.5 hover:text-gray-900"><X className="w-3 h-3" /></button>
+                <button onClick={() => { setCategory(""); setPage(1); }}><X className="w-3 h-3" /></button>
               </span>
             )}
             {location && (
               <span className="inline-flex items-center gap-1 bg-gray-100 text-gray-700 border border-gray-200 rounded-full px-2.5 py-0.5 text-xs font-medium">
                 {location}
-                <button onClick={() => { setLocation(""); setPage(1); }} className="ml-0.5 hover:text-gray-900"><X className="w-3 h-3" /></button>
+                <button onClick={() => { setLocation(""); setPage(1); }}><X className="w-3 h-3" /></button>
               </span>
             )}
             {statusF && (
@@ -613,13 +621,13 @@ export default function ForecastsPage() {
                 : "bg-green-50 text-green-700 border-green-200",
               ].join(" ")}>
                 {statusF}
-                <button onClick={() => { setStatusF(""); setPage(1); }} className="ml-0.5"><X className="w-3 h-3" /></button>
+                <button onClick={() => { setStatusF(""); setPage(1); }}><X className="w-3 h-3" /></button>
               </span>
             )}
             {search && (
               <span className="inline-flex items-center gap-1 bg-gray-100 text-gray-700 border border-gray-200 rounded-full px-2.5 py-0.5 text-xs font-medium">
                 "{search}"
-                <button onClick={() => { setSearch(""); setPage(1); }} className="ml-0.5 hover:text-gray-900"><X className="w-3 h-3" /></button>
+                <button onClick={() => { setSearch(""); setPage(1); }}><X className="w-3 h-3" /></button>
               </span>
             )}
           </div>
