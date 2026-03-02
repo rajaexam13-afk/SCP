@@ -217,7 +217,6 @@ async def delete_scenario(
             detail=f"'{scenario.name}' is a protected scenario and cannot be deleted",
         )
     # BFS — collect the target + all descendants so nothing is orphaned.
-    # This works regardless of whether the DB FK is CASCADE or SET NULL.
     all_ids: list[str] = []
     frontier: list[str] = [scenario_id]
     while frontier:
@@ -230,12 +229,23 @@ async def delete_scenario(
         )
         frontier = [r[0] for r in children.all()]
 
+    # Delete deltas explicitly first — avoids FK violations regardless of whether
+    # the DB-level CASCADE is in place on scenario_deltas.scenario_id.
     await db.execute(
-        sql_delete(Scenario).where(
-            Scenario.id.in_(all_ids),
-            Scenario.tenant_id == user.tenant_id,
-        )
+        sql_delete(ScenarioDelta)
+        .where(ScenarioDelta.scenario_id.in_(all_ids))
+        .execution_options(synchronize_session=False)
     )
+
+    # Delete scenarios deepest-first (reverse BFS) so the self-referential
+    # parent_id FK is never violated even if CASCADE is not active.
+    for sc_id in reversed(all_ids):
+        await db.execute(
+            sql_delete(Scenario)
+            .where(Scenario.id == sc_id, Scenario.tenant_id == user.tenant_id)
+            .execution_options(synchronize_session=False)
+        )
+
     await db.commit()
     return {"status": "deleted", "id": scenario_id, "total_deleted": len(all_ids)}
 

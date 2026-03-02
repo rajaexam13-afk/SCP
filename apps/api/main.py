@@ -51,6 +51,27 @@ async def _run_migrations():
                 ADD CONSTRAINT scenarios_parent_id_fkey
                     FOREIGN KEY (parent_id) REFERENCES scenarios(id) ON DELETE CASCADE;
         """))
+        # Ensure scenario_deltas.scenario_id FK is ON DELETE CASCADE.
+        # The table may have been created before this was added to the model.
+        await conn.execute(text("""
+            ALTER TABLE scenario_deltas
+                DROP CONSTRAINT IF EXISTS scenario_deltas_scenario_id_fkey;
+        """))
+        await conn.execute(text("""
+            ALTER TABLE scenario_deltas
+                ADD CONSTRAINT scenario_deltas_scenario_id_fkey
+                    FOREIGN KEY (scenario_id) REFERENCES scenarios(id) ON DELETE CASCADE;
+        """))
+        # Same for scenario_comments
+        await conn.execute(text("""
+            ALTER TABLE scenario_comments
+                DROP CONSTRAINT IF EXISTS scenario_comments_scenario_id_fkey;
+        """))
+        await conn.execute(text("""
+            ALTER TABLE scenario_comments
+                ADD CONSTRAINT scenario_comments_scenario_id_fkey
+                    FOREIGN KEY (scenario_id) REFERENCES scenarios(id) ON DELETE CASCADE;
+        """))
 
 
 @asynccontextmanager
