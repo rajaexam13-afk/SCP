@@ -5,7 +5,7 @@ import { clsx } from "clsx";
 import {
   GitBranch, ChevronDown, ChevronRight,
   ShieldCheck, Clock, Eye, CheckCircle, Lock,
-  Plus, Trash2, CheckSquare, Square,
+  Plus, Trash2, CheckSquare, Square, Zap, Hand, Globe, EyeOff,
 } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { Skeleton } from "@/components/ui/Skeleton";
@@ -18,7 +18,9 @@ export interface ScenarioNode {
   created_at: string;
   delta_count: number;
   is_protected: boolean;
+  is_public: boolean;
   parent_id: string | null;
+  commit_mode: "auto" | "manual";
   depth: number;
   children: ScenarioNode[];
 }
@@ -37,8 +39,10 @@ interface Props {
   compareIds: string[];
   onSelect: (id: string) => void;
   onToggleCompare: (id: string) => void;
-  onBranch: (parentId: string) => void;   // open create modal pre-filled with parent
+  onBranch: (parentId: string) => void;
   onDelete: (id: string, name: string) => void;
+  onChangeCommitMode?: (id: string, mode: "auto" | "manual") => void;
+  onChangeVisibility?: (id: string, is_public: boolean) => void;
 }
 
 export function ScenarioTree({
@@ -50,6 +54,8 @@ export function ScenarioTree({
   onToggleCompare,
   onBranch,
   onDelete,
+  onChangeCommitMode,
+  onChangeVisibility,
 }: Props) {
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
 
@@ -137,6 +143,15 @@ export function ScenarioTree({
               {node.is_protected && (
                 <ShieldCheck className="w-3.5 h-3.5 text-blue-400 flex-shrink-0" title="Protected — cannot be deleted" />
               )}
+              {/* Visibility badge */}
+              {!node.is_public && (
+                <EyeOff className="w-3 h-3 text-gray-400 flex-shrink-0" title="Private — only visible to you" />
+              )}
+              {node.parent_id && (
+                node.commit_mode === "auto"
+                  ? <Zap  className="w-3 h-3 text-yellow-500 flex-shrink-0" title="Auto-sync: inherits parent changes automatically" />
+                  : <Hand className="w-3 h-3 text-gray-400 flex-shrink-0" title="Manual-sync: review parent changes before applying" />
+              )}
             </div>
             {node.description && (
               <p className="text-xs text-gray-400 truncate mb-1">{node.description}</p>
@@ -153,6 +168,42 @@ export function ScenarioTree({
 
           {/* Hover actions */}
           <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0">
+            {/* Visibility toggle — only for non-protected scenarios */}
+            {!node.is_protected && onChangeVisibility && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onChangeVisibility(node.id, !node.is_public);
+                }}
+                className="p-1 rounded-lg hover:bg-gray-200 transition-colors"
+                title={node.is_public ? "Make private (visible only to you)" : "Make public (visible to all team members)"}
+              >
+                {node.is_public
+                  ? <Globe  className="w-3.5 h-3.5 text-gray-400" />
+                  : <EyeOff className="w-3.5 h-3.5 text-gray-400" />
+                }
+              </button>
+            )}
+
+            {/* Commit mode toggle — only for child scenarios */}
+            {node.parent_id && onChangeCommitMode && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onChangeCommitMode(node.id, node.commit_mode === "auto" ? "manual" : "auto");
+                }}
+                className="p-1 rounded-lg hover:bg-yellow-100 transition-colors"
+                title={node.commit_mode === "auto"
+                  ? "Switch to manual-sync"
+                  : "Switch to auto-sync"}
+              >
+                {node.commit_mode === "auto"
+                  ? <Zap  className="w-3.5 h-3.5 text-yellow-500" />
+                  : <Hand className="w-3.5 h-3.5 text-gray-400"   />
+                }
+              </button>
+            )}
+
             {/* Compare toggle */}
             <button
               onClick={(e) => { e.stopPropagation(); onToggleCompare(node.id); }}

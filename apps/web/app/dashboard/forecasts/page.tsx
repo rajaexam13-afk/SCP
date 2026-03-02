@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   useReactTable,
@@ -19,6 +19,24 @@ import {
 import { useForecastFilters } from "@/store/forecastFilters";
 
 // ─── Types ────────────────────────────────────────────────────
+
+interface ScenarioNode {
+  id: string;
+  name: string;
+  depth: number;
+  is_protected: boolean;
+  children: ScenarioNode[];
+}
+
+function flattenTree(
+  nodes: ScenarioNode[],
+  depth = 0
+): Array<{ id: string; name: string; depth: number }> {
+  return nodes.flatMap((n) => [
+    { id: n.id, name: n.name, depth },
+    ...flattenTree(n.children ?? [], depth + 1),
+  ]);
+}
 
 interface SKURow {
   sku_id: string;
@@ -100,10 +118,12 @@ function mapeColor(mape: number) {
 
 function OverridePopover({
   cell,
+  scenarioId,
   onClose,
   onSave,
 }: {
   cell: OverrideCell;
+  scenarioId: string;
   onClose: () => void;
   onSave: (val: number, reason: string) => void;
 }) {
@@ -176,24 +196,38 @@ function ForecastCell({
   onOverrideSaved: (skuId: string, weekIdx: number, newVal: number) => void;
 }) {
   const [open, setOpen] = useState(false);
+  // Read the scenario currently selected in the header filter.
+  // Overrides must be scoped to a specific scenario — they are stored as
+  // scenario deltas so they show up in the Scenario Planning workspace.
+  const { scenario: scenarioId } = useForecastFilters();
+  const qc = useQueryClient();
 
   const mutation = useMutation({
     mutationFn: (body: { override_value: number; reason: string }) =>
-      api.post("/forecasts/overrides", {
-        sku_id: skuId,
-        location: "DC-East",
-        period: weekLabel(weekIdx + 1),
-        override_value: body.override_value,
-        reason: body.reason,
+      // Post to the scenario-delta endpoint so the override is stored exactly
+      // once, under the selected scenario, and never bleeds into other scenarios.
+      api.post(`/scenarios/${scenarioId}/deltas`, {
+        sku_id:     skuId,
+        period:     weekLabel(weekIdx + 1),
+        value:      body.override_value,
+        comment:    body.reason || "",
+        measure_id: "sales_qty",
       }),
     onSuccess: (_, vars) => {
       onOverrideSaved(skuId, weekIdx, vars.override_value);
+      // Refresh the scenario tree delta counts and the delta list for this scenario.
+      qc.invalidateQueries({ queryKey: ["scenarios-tree"] });
+      qc.invalidateQueries({ queryKey: ["scenario-deltas", scenarioId] });
       setOpen(false);
     },
   });
 
   if (isHistorical)
     return <span className="text-gray-400 text-xs font-mono">{fmtNum(value)}</span>;
+
+  // No scenario selected — show value as plain text, overrides disabled.
+  if (!scenarioId)
+    return <span className="text-xs font-mono text-gray-400 cursor-not-allowed" title="Select a scenario to enable overrides">{fmtNum(value)}</span>;
 
   return (
     <div className="relative group">
@@ -206,6 +240,7 @@ function ForecastCell({
       {open && (
         <OverridePopover
           cell={{ skuId, weekIdx, currentValue: value, skuName }}
+          scenarioId={scenarioId}
           onClose={() => setOpen(false)}
           onSave={(val, reason) => mutation.mutate({ override_value: val, reason })}
         />
@@ -222,8 +257,16 @@ export default function ForecastsPage() {
   // ── Filter state lives in shared store (rendered in Header) ──
   const {
     search, scenario, timeRange, category, location, statusF,
-    page, setPage,
+    page, setPage, setScenario,
   } = useForecastFilters();
+
+  // Scenario list for inline selector — reuses the same cache key as the Header.
+  const { data: scenarioTree = [] } = useQuery<ScenarioNode[]>({
+    queryKey: ["scenarios-tree"],
+    queryFn: () => api.get("/scenarios/tree").then((r) => r.data),
+    staleTime: 5 * 60 * 1000,
+  });
+  const flatScenarios = flattenTree(scenarioTree);
 
   const [sorting, setSorting]   = useState<SortingState>([]);
   const [overrides, setOverrides] = useState<Record<string, number>>({});
@@ -372,12 +415,27 @@ export default function ForecastsPage() {
 
   return (
     <div className="space-y-4 h-full flex flex-col">
-      {/* Page actions — filters live in the top Header bar */}
-      <div className="flex items-center justify-between flex-shrink-0">
-        <p className="text-sm text-gray-500">
-          SKU-level grid · Click any forecast cell to override
-          {data?.total != null && <span className="ml-2 font-medium text-gray-700">{data.total} SKUs</span>}
-        </p>
+      {/* Page actions toolbar */}
+      <div className="flex items-center justify-between flex-shrink-0 gap-3 flex-wrap">
+        {/* Always-visible scenario selector — required to enable cell overrides */}
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <GitBranch className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
+          <select
+            value={scenario}
+            onChange={(e) => setScenario(e.target.value)}
+            className="h-8 text-sm border border-gray-200 rounded-lg px-2 bg-white focus:outline-none focus:ring-2 focus:ring-brand-500 text-gray-700 min-w-[200px]"
+          >
+            <option value="">Select scenario to override…</option>
+            {flatScenarios.map((s) => (
+              <option key={s.id} value={s.id}>
+                {"  ".repeat(s.depth)}{s.name}
+              </option>
+            ))}
+          </select>
+          {data?.total != null && (
+            <span className="text-xs text-gray-400">{data.total} SKUs</span>
+          )}
+        </div>
         <div className="flex items-center gap-2">
           <button
             onClick={exportCSV}
@@ -410,10 +468,15 @@ export default function ForecastsPage() {
             <div className="w-3 h-3 rounded bg-blue-50 border border-blue-100" />
             Statistical forecast · click to override
           </div>
-          {scenario && selectedScenarioName && (
-            <div className="ml-auto flex items-center gap-1.5 text-brand-600 font-medium">
+          {scenario ? (
+            <div className="ml-auto flex items-center gap-1.5 text-brand-600 font-medium text-xs">
               <GitBranch className="w-3.5 h-3.5" />
-              Scenario: {selectedScenarioName}
+              Overrides → active scenario
+            </div>
+          ) : (
+            <div className="ml-auto flex items-center gap-1.5 text-amber-600 text-xs">
+              <AlertTriangle className="w-3.5 h-3.5" />
+              Select a scenario in the filter above to enable cell overrides
             </div>
           )}
         </div>
@@ -505,14 +568,14 @@ export default function ForecastsPage() {
           <div className="flex items-center gap-2">
             <button
               disabled={page <= 1}
-              onClick={() => setPage((p) => p - 1)}
+              onClick={() => setPage(page - 1)}
               className="text-xs text-gray-600 border border-gray-200 rounded-lg px-3 py-1.5 hover:bg-gray-50 disabled:opacity-40"
             >
               ← Prev
             </button>
             <button
               disabled={page >= (data?.pages ?? 1)}
-              onClick={() => setPage((p) => p + 1)}
+              onClick={() => setPage(page + 1)}
               className="text-xs text-gray-600 border border-gray-200 rounded-lg px-3 py-1.5 hover:bg-gray-50 disabled:opacity-40"
             >
               Next →

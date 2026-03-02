@@ -77,11 +77,12 @@ async def seed_enterprise_tree():
             created_by=SEED_USER_ID,
             delta_count=0,
             is_protected=True,
+            is_public=True,
         )
         db.add(enterprise)
         await db.flush()
 
-        # 3. Optimistic child
+        # 3. Optimistic child — manual sync so it stays independent by default
         optimistic = Scenario(
             id=SEED_OPTIMISTIC_ID,
             tenant_id=SEED_TENANT_ID,
@@ -93,10 +94,12 @@ async def seed_enterprise_tree():
             created_by=SEED_USER_ID,
             delta_count=0,
             is_protected=False,
+            commit_mode="manual",
+            is_public=True,
         )
         db.add(optimistic)
 
-        # 4. Conservative child
+        # 4. Conservative child — manual sync so it stays independent by default
         conservative = Scenario(
             id=SEED_CONSERVATIVE_ID,
             tenant_id=SEED_TENANT_ID,
@@ -108,6 +111,8 @@ async def seed_enterprise_tree():
             created_by=SEED_USER_ID,
             delta_count=0,
             is_protected=False,
+            commit_mode="manual",
+            is_public=True,
         )
         db.add(conservative)
 

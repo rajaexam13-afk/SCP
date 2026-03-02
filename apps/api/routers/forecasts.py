@@ -221,30 +221,31 @@ async def get_sku_grid(
     user: User = Depends(get_current_user),
 ):
     """Return paginated SKU-level forecast grid."""
-    all_skus = _generate_mock_skus(user.tenant_id)
+    full_skus = _generate_mock_skus(user.tenant_id)  # generated once
+    filtered = full_skus
 
     # Apply filters
     if category:
-        all_skus = [s for s in all_skus if s["category"].lower() == category.lower()]
+        filtered = [s for s in filtered if s["category"].lower() == category.lower()]
     if location:
-        all_skus = [s for s in all_skus if s["location"].lower() == location.lower()]
+        filtered = [s for s in filtered if s["location"].lower() == location.lower()]
     if status:
-        all_skus = [s for s in all_skus if s["status"] == status]
+        filtered = [s for s in filtered if s["status"] == status]
     if search:
         q = search.lower()
-        all_skus = [s for s in all_skus if q in s["sku_id"].lower() or q in s["name"].lower()]
+        filtered = [s for s in filtered if q in s["sku_id"].lower() or q in s["name"].lower()]
 
-    total = len(all_skus)
+    total = len(filtered)
     start = (page - 1) * page_size
-    page_skus = all_skus[start: start + page_size]
+    page_skus = filtered[start: start + page_size]
 
     return {
         "total": total,
         "page": page,
         "page_size": page_size,
         "pages": (total + page_size - 1) // page_size,
-        "categories": sorted(set(s["category"] for s in _generate_mock_skus(user.tenant_id))),
-        "locations":  sorted(set(s["location"]  for s in _generate_mock_skus(user.tenant_id))),
+        "categories": sorted(set(s["category"] for s in full_skus)),
+        "locations":  sorted(set(s["location"]  for s in full_skus)),
         "items": page_skus,
     }
 

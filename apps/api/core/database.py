@@ -41,6 +41,10 @@ async def get_db() -> AsyncSession:
 async def init_db():
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        # Idempotent column additions for existing deployments
+        await conn.execute(text(
+            "ALTER TABLE scenarios ADD COLUMN IF NOT EXISTS commit_mode VARCHAR(10) NOT NULL DEFAULT 'manual'"
+        ))
 
 
 def get_clickhouse_client():

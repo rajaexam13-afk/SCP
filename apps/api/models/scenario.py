@@ -13,25 +13,36 @@ class ScenarioStatus(str, enum.Enum):
     locked   = "locked"
 
 
+class CommitMode(str, enum.Enum):
+    auto   = "auto"    # Automatically inherit parent deltas (unless locally overridden)
+    manual = "manual"  # Show pending parent updates; user must explicitly sync
+
+
 class Scenario(Base, TimestampMixin):
     """
     A scenario stores ONLY deltas (overrides) relative to a base plan.
     No data is copied. Query-time resolution merges base + deltas.
     Scenarios can be nested: parent_id references another Scenario,
     forming a tree (e.g. Enterprise → Optimistic, Conservative).
+
+    commit_mode (child scenarios only):
+      "auto"   — new parent deltas auto-propagate here unless locally overridden
+      "manual" — parent changes queue as pending; user syncs explicitly
     """
     __tablename__ = "scenarios"
 
     id           = Column(PG_UUID(as_uuid=False), primary_key=True, default=lambda: str(uuid.uuid4()))
     tenant_id    = Column(PG_UUID(as_uuid=False), ForeignKey("tenants.id", ondelete="CASCADE"), nullable=False, index=True)
     base_plan_id = Column(PG_UUID(as_uuid=False), nullable=False)  # ClickHouse base plan ref
-    parent_id    = Column(PG_UUID(as_uuid=False), ForeignKey("scenarios.id", ondelete="SET NULL"), nullable=True, index=True)
+    parent_id    = Column(PG_UUID(as_uuid=False), ForeignKey("scenarios.id", ondelete="CASCADE"), nullable=True, index=True)
     name         = Column(String(255), nullable=False)
     description  = Column(Text, default="")
     status       = Column(String(20), default="draft", nullable=False)
     created_by   = Column(PG_UUID(as_uuid=False), ForeignKey("users.id"), nullable=False)
     delta_count  = Column(Integer, default=0)
     is_protected = Column(Boolean, default=False, nullable=False)  # Cannot be deleted
+    commit_mode  = Column(String(10), default="manual", nullable=False, server_default="manual")
+    is_public    = Column(Boolean, default=True, nullable=False, server_default="true")  # False = private (creator only)
 
     creator      = relationship("User", foreign_keys=[created_by])
     deltas       = relationship("ScenarioDelta", back_populates="scenario", cascade="all, delete-orphan")

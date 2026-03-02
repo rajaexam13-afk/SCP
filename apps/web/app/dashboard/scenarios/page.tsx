@@ -53,10 +53,30 @@ export default function ScenariosPage() {
     },
   });
 
+  const changeCommitMode = useMutation({
+    mutationFn: ({ id, mode }: { id: string; mode: "auto" | "manual" }) =>
+      api.patch(`/scenarios/${id}/commit-mode`, { commit_mode: mode }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["scenarios-tree"] }),
+  });
+
+  const changeVisibility = useMutation({
+    mutationFn: ({ id, is_public }: { id: string; is_public: boolean }) =>
+      api.patch(`/scenarios/${id}/visibility`, { is_public }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["scenarios-tree"] }),
+  });
+
   const handleBranch = useCallback((parentId: string) => {
     setBranchParentId(parentId);
     setShowCreate(true);
   }, []);
+
+  const handleChangeCommitMode = useCallback((id: string, mode: "auto" | "manual") => {
+    changeCommitMode.mutate({ id, mode });
+  }, [changeCommitMode]);
+
+  const handleChangeVisibility = useCallback((id: string, is_public: boolean) => {
+    changeVisibility.mutate({ id, is_public });
+  }, [changeVisibility]);
 
   const handleDelete = useCallback((id: string, name: string) => {
     if (confirm(`Delete scenario "${name}"? This will also delete all its deltas and child scenarios.`)) {
@@ -129,13 +149,15 @@ export default function ScenariosPage() {
               }
               onBranch={handleBranch}
               onDelete={handleDelete}
+              onChangeCommitMode={handleChangeCommitMode}
+              onChangeVisibility={handleChangeVisibility}
             />
           </div>
 
           {/* Workspace */}
           <div className="flex-1 min-w-0">
             {activeScenario ? (
-              <ScenarioWorkspace scenario={activeScenario} />
+              <ScenarioWorkspace key={activeScenario.id} scenario={activeScenario} />
             ) : (
               <div className="h-full bg-white rounded-2xl border border-gray-100 flex flex-col items-center justify-center text-center p-12">
                 <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center mb-4">
