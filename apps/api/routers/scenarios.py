@@ -442,6 +442,78 @@ async def promote_delta_to_parent(
     return {"status": "promoted", "parent_id": parent.id, "parent_name": parent.name}
 
 
+@router.post("/{scenario_id}/promote-all", status_code=201)
+async def promote_all_to_parent(
+    scenario_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Copy all unlocked child deltas to the parent scenario, skipping conflicts."""
+    child = await _get_scenario(scenario_id, user.tenant_id, db)
+    if not child.parent_id:
+        raise HTTPException(status_code=400, detail="Root scenarios have no parent to promote to")
+
+    parent_result = await db.execute(
+        select(Scenario).where(
+            Scenario.id == child.parent_id,
+            Scenario.tenant_id == user.tenant_id,
+        )
+    )
+    parent = parent_result.scalar_one_or_none()
+    if not parent:
+        raise HTTPException(status_code=404, detail="Parent scenario not found")
+    if parent.status == ScenarioStatus.locked:
+        raise HTTPException(status_code=400, detail="Parent scenario is locked")
+
+    child_deltas_result = await db.execute(
+        select(ScenarioDelta).where(
+            ScenarioDelta.scenario_id == scenario_id,
+            ScenarioDelta.tenant_id == user.tenant_id,
+            ScenarioDelta.is_locked == False,
+        )
+    )
+    child_deltas = child_deltas_result.scalars().all()
+
+    parent_deltas_result = await db.execute(
+        select(ScenarioDelta).where(
+            ScenarioDelta.scenario_id == parent.id,
+            ScenarioDelta.tenant_id == user.tenant_id,
+        )
+    )
+    parent_keys = {
+        (d.sku_id, d.location_id or "", d.channel_id or "", d.period, d.measure_id)
+        for d in parent_deltas_result.scalars().all()
+    }
+
+    promoted = 0
+    skipped = 0
+    for delta in child_deltas:
+        key = (delta.sku_id, delta.location_id or "", delta.channel_id or "", delta.period, delta.measure_id)
+        if key not in parent_keys:
+            db.add(ScenarioDelta(
+                scenario_id=parent.id,
+                tenant_id=user.tenant_id,
+                sku_id=delta.sku_id,
+                location_id=delta.location_id,
+                channel_id=delta.channel_id,
+                period=delta.period,
+                measure_id=delta.measure_id,
+                original_value=delta.original_value,
+                override_value=delta.override_value,
+                change_pct=delta.change_pct,
+                author_id=user.id,
+                comment=f"Promoted from '{child.name}'",
+            ))
+            promoted += 1
+        else:
+            skipped += 1
+
+    if promoted > 0:
+        parent.delta_count = (parent.delta_count or 0) + promoted
+    await db.commit()
+    return {"status": "promoted", "promoted": promoted, "skipped": skipped, "parent_id": parent.id}
+
+
 @router.get("/{scenario_id}/pending-sync")
 async def get_pending_sync(
     scenario_id: str,

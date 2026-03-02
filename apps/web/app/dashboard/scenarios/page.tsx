@@ -157,7 +157,11 @@ export default function ScenariosPage() {
           {/* Workspace */}
           <div className="flex-1 min-w-0">
             {activeScenario ? (
-              <ScenarioWorkspace key={activeScenario.id} scenario={activeScenario} />
+              <ScenarioWorkspace
+                key={activeScenario.id}
+                scenario={activeScenario}
+                onDelete={() => setActiveScenarioId(null)}
+              />
             ) : (
               <div className="h-full bg-white rounded-2xl border border-gray-100 flex flex-col items-center justify-center text-center p-12">
                 <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center mb-4">

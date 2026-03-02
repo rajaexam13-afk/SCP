@@ -7,6 +7,7 @@ import { api } from "@/lib/api";
 import {
   RotateCcw, Filter, Download, Plus, X,
   Users, Lock, CheckCircle2, Upload, RefreshCw, Zap, AlertCircle, EyeOff,
+  ArrowUpToLine, ArrowDownToLine, Trash2,
 } from "lucide-react";
 import { clsx } from "clsx";
 
@@ -18,6 +19,7 @@ interface Scenario {
   parent_id: string | null;
   commit_mode: "auto" | "manual";
   is_public: boolean;
+  is_protected?: boolean;
   status: "draft" | "review" | "approved" | "locked";
   created_by: string;
   created_at: string;
@@ -48,13 +50,16 @@ const EMPTY_FORM = { sku_id: "", period: "", value: "", comment: "" };
 
 interface Props {
   scenario: Scenario;
+  onDelete?: () => void;
 }
 
-export function ScenarioWorkspace({ scenario }: Props) {
+export function ScenarioWorkspace({ scenario, onDelete }: Props) {
   const qc = useQueryClient();
-  const [filter, setFilter]           = useState("");
-  const [showAddForm, setShowAddForm] = useState(false);
-  const [form, setForm]               = useState(EMPTY_FORM);
+  const [filter, setFilter]                 = useState("");
+  const [showAddForm, setShowAddForm]       = useState(false);
+  const [form, setForm]                     = useState(EMPTY_FORM);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [promoteAllResult, setPromoteAllResult]   = useState<{ promoted: number; skipped: number } | null>(null);
 
   // ── Data queries ────────────────────────────────────────────
   const { data: deltas = [], isLoading } = useQuery<Delta[]>({
@@ -126,6 +131,27 @@ export function ScenarioWorkspace({ scenario }: Props) {
     },
   });
 
+  const promoteAll = useMutation({
+    mutationFn: () => api.post(`/scenarios/${scenario.id}/promote-all`),
+    onSuccess: (res) => {
+      setPromoteAllResult({ promoted: res.data.promoted, skipped: res.data.skipped });
+      qc.invalidateQueries({ queryKey: ["scenarios-tree"] });
+      qc.invalidateQueries({ queryKey: ["scenario-deltas", scenario.id] });
+      if (scenario.parent_id) {
+        qc.invalidateQueries({ queryKey: ["scenario-deltas", scenario.parent_id] });
+        qc.invalidateQueries({ queryKey: ["scenario-forecast", scenario.parent_id] });
+      }
+    },
+  });
+
+  const deleteScenario = useMutation({
+    mutationFn: () => api.delete(`/scenarios/${scenario.id}`),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["scenarios-tree"] });
+      onDelete?.();
+    },
+  });
+
   // ── Helpers ─────────────────────────────────────────────────
   const handleFormChange = useCallback(
     (field: keyof typeof EMPTY_FORM, value: string) =>
@@ -180,6 +206,30 @@ export function ScenarioWorkspace({ scenario }: Props) {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {/* ── Child scenario actions ── */}
+          {scenario.parent_id && (
+            <>
+              <button
+                onClick={() => syncFromParent.mutate()}
+                disabled={syncFromParent.isPending}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
+                title="Pull latest changes from parent scenario into this one"
+              >
+                <ArrowDownToLine className={clsx("w-3.5 h-3.5", syncFromParent.isPending && "animate-spin")} />
+                Sync from parent
+              </button>
+              <button
+                onClick={() => { setPromoteAllResult(null); promoteAll.mutate(); }}
+                disabled={promoteAll.isPending || deltas.filter(d => !d.locked).length === 0}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
+                title="Push all your overrides up to the parent scenario"
+              >
+                <ArrowUpToLine className="w-3.5 h-3.5" />
+                Push to parent
+              </button>
+            </>
+          )}
+
           <button className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-gray-600 border border-gray-200 rounded-lg hover:bg-gray-50 transition-colors">
             <Download className="w-3.5 h-3.5" /> Export
           </button>
@@ -191,8 +241,66 @@ export function ScenarioWorkspace({ scenario }: Props) {
               <CheckCircle2 className="w-3.5 h-3.5" /> Submit for review
             </button>
           )}
+
+          {/* ── Delete ── */}
+          {!scenario.is_protected && scenario.status !== "locked" && (
+            showDeleteConfirm ? (
+              <div className="flex items-center gap-1.5 px-3 py-1.5 bg-red-50 border border-red-200 rounded-lg">
+                <span className="text-xs text-red-700 font-medium">Delete?</span>
+                <button
+                  onClick={() => deleteScenario.mutate()}
+                  disabled={deleteScenario.isPending}
+                  className="text-xs font-semibold text-red-600 hover:text-red-800 transition-colors disabled:opacity-50"
+                >
+                  {deleteScenario.isPending ? "Deleting…" : "Yes"}
+                </button>
+                <span className="text-red-300">·</span>
+                <button
+                  onClick={() => setShowDeleteConfirm(false)}
+                  className="text-xs text-gray-500 hover:text-gray-700 transition-colors"
+                >
+                  No
+                </button>
+              </div>
+            ) : (
+              <button
+                onClick={() => setShowDeleteConfirm(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-red-500 border border-red-200 rounded-lg hover:bg-red-50 transition-colors"
+                title="Delete this scenario and all its overrides"
+              >
+                <Trash2 className="w-3.5 h-3.5" /> Delete
+              </button>
+            )
+          )}
         </div>
       </div>
+
+      {/* ── Promote-all result banner ───────────────────────── */}
+      {promoteAllResult && (
+        <div className="mx-6 mt-3 flex items-center gap-3 px-4 py-2.5 bg-green-50 border border-green-200 rounded-xl flex-shrink-0">
+          <CheckCircle2 className="w-4 h-4 text-green-500 flex-shrink-0" />
+          <p className="text-xs text-green-700 flex-1">
+            <span className="font-semibold">{promoteAllResult.promoted} override{promoteAllResult.promoted !== 1 ? "s" : ""}</span> pushed to parent
+            {promoteAllResult.skipped > 0 && ` · ${promoteAllResult.skipped} skipped (conflict)`}
+          </p>
+          <button onClick={() => setPromoteAllResult(null)} className="text-green-400 hover:text-green-600">
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
+      {/* ── Error banner ─────────────────────────────────────── */}
+      {deleteScenario.isError && (
+        <div className="mx-6 mt-3 flex items-center gap-3 px-4 py-2.5 bg-red-50 border border-red-200 rounded-xl flex-shrink-0">
+          <AlertCircle className="w-4 h-4 text-red-500 flex-shrink-0" />
+          <p className="text-xs text-red-700 flex-1">
+            Failed to delete scenario — it may be protected or have dependents.
+          </p>
+          <button onClick={() => { deleteScenario.reset(); setShowDeleteConfirm(false); }} className="text-red-400 hover:text-red-600">
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
 
       {/* ── Manual-mode pending sync banner ────────────────── */}
       {scenario.parent_id && pendingSync.length > 0 && (
